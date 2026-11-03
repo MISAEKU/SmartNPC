@@ -13,7 +13,8 @@ namespace SmartNpc.UI;
 /// 主设置窗口顶部横栏（<c>ImGui.TabBar</c>）四个子页之一 —— 主 NPC + 副 NPC 1/2/3。
 ///
 /// <para><b>与主 NPC 页 1:1 对齐</b>：控件种类、滑条量程、格式串全部照搬主页；
-/// 头部视线一族除外（副 NPC 没有视线层实现，不是「设置」而是「没有的功能」）。</para>
+/// 头部视线一族（v0.18.69.23 四轮补齐）同样接入 —— 走与主 NPC 同一套状态机，
+/// 状态按槽位独立（见 SubNpcManager.ApplyHeadLook）。</para>
 ///
 /// <para><b>跟随主 NPC 的方式（用户裁定）</b>：不做每项一个小勾选 ——
 /// 每个大分组标题下放一个<b>「跟随主 NPC 设置」按钮</b>，点了把整组的覆盖值
@@ -88,9 +89,11 @@ public sealed unsafe class SubNpcPanel
         if (Header("待机姿势", open: true))   { ImGui.Indent(); DrawIdlePose(s);     ImGui.Unindent(); }
         if (Header("跟随与瞬移", open: true)) { ImGui.Indent(); DrawFollow(s);       ImGui.Unindent(); }
         if (Header("绕障", open: true))       { ImGui.Indent(); DrawAvoid(s);        ImGui.Unindent(); }
-        if (Header("站定节奏", open: true))   { ImGui.Indent(); DrawIdleRhythm(s);   ImGui.Unindent(); }
+        if (Header("站定节奏与视线", open: true))
+        { ImGui.Indent(); DrawIdleRhythm(s);   ImGui.Unindent(); }
         if (Header("口型与动画", open: false)){ ImGui.Indent(); DrawAnim(s);         ImGui.Unindent(); }
         if (Header("语音与气泡", open: false)){ ImGui.Indent(); DrawVoiceBalloon(s); ImGui.Unindent(); }
+        if (Header("动作", open: false))      { ImGui.Indent(); DrawActions();       ImGui.Unindent(); }
 
         // 改动后延迟落盘（不打断操作，也不丢设置）。
         if (_saveTimer > 0f)
@@ -218,6 +221,16 @@ public sealed unsafe class SubNpcPanel
         ImGui.TextDisabled(designs.Count == 0
             ? "没读到 Glamourer 设计，外观将照抄玩家。"
             : "选中即换上；召唤时自动套用。");
+
+        ImGui.Spacing();
+
+        // v0.18.69.23 四轮补漏：换区自动重召唤（可空覆盖，null = 主配置值）。
+        // 主页放在「外观与召唤」组，副页同位。
+        var autoRespawn = s.AutoRespawnAfterZoneChange ?? M.AutoRespawnAfterZoneChange;
+        if (ImGui.Checkbox($"换区后自动跟随##wautorespawn{_slot}", ref autoRespawn))
+        { s.AutoRespawnAfterZoneChange = autoRespawn; Touch(); }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("开启：换区后她会自动在你身边重新出现，不用每次手动召唤。\n关闭：换区后等你手动召唤。\n「打开插件自动召唤」总开关在主 NPC 页（对所有槽位生效）。");
     }
 
     // ── 性格与台词（开关/节奏照主页文案与量程；组按钮 = 抄主配置）──
@@ -517,19 +530,32 @@ public sealed unsafe class SubNpcPanel
             ImGui.SetTooltip("一次绕行中断（拐进死角）后，隔多久才允许再挑新方向。\n调 0 = 立刻可以再挑（贴身绕墙角更顺，但可能轻微抖）。");
     }
 
-    // ── 站定节奏（量程 1:1 照主页「站定节奏与视线」组的游荡/小动作）──
+    // ── 站定节奏与视线（量程 1:1 照主页同名组：游荡/小动作/头部视线/目标交互）──
+    // v0.18.69.23 四轮：头部视线一族补齐（之前误删，用户指出）——
+    // 实现走 SubNpcManager.ApplyHeadLook（与主 NPC 同一套状态机，状态按槽位独立）。
 
     private void DrawIdleRhythm(SubNpcSetting s)
     {
         FollowMainButton(
             $"idleR{_slot}",
-            "点一下 = 游荡范围 / 小动作间隔 / 移动闸门全部回到主 NPC 面板的值（之后仍可单独调）。",
+            "点一下 = 游荡范围 / 小动作间隔 / 移动闸门 / 头部视线全部回到主 NPC 面板的值（之后仍可单独调）。",
             () =>
             {
                 s.RoamRange                = null;
                 s.IdleGestureMin           = null;
                 s.IdleGestureMax           = null;
                 s.BlockGesturesWhileMoving = null;
+                s.CameraHeadLook           = null;
+                s.AlwaysGazeAtPlayer       = null;
+                s.NeverGazeAtPlayer        = null;
+                s.GazeLookPercent          = null;
+                s.GazeLookMin              = null;
+                s.GazeLookMax              = null;
+                s.GazeAwayMin              = null;
+                s.GazeAwayMax              = null;
+                s.HeadTurnLimitDeg         = null;
+                s.TurnChancePercent        = null;
+                s.TargetableByPlayer       = null;
             });
 
         SubLabel("游荡与小动作");
@@ -557,6 +583,93 @@ public sealed unsafe class SubNpcPanel
         { s.BlockGesturesWhileMoving = blockMoving; Touch(); }
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("开着更干净；关掉则允许她边走边做动作（更容易平移）。");
+
+        // ── 头部视线（v0.18.69.23 四轮补齐；量程与文案 1:1 照主页「头部视线」小节）──
+        SubLabel("头部视线");
+
+        // v0.18.32 最终语义（与主页一致，优先级从高到低）：
+        //   「始终不注视玩家」   = 最高优先级：勾=完全不看，上面两项失效（置灰）。
+        //   「站定时用头/视线看」= 纯移动闸门：勾=走动时收回视线；
+        //   「始终注视玩家」     = 注视频率：勾=一直看；不勾=按占比轮流看你/移开。
+        var never = s.NeverGazeAtPlayer ?? M.NeverGazeAtPlayer;
+
+        if (never)
+            ImGui.BeginDisabled();
+
+        var head = s.CameraHeadLook ?? M.CameraHeadLook;
+        if (ImGui.Checkbox($"站定时用头 / 视线看（走动时收回）##wheadlook{_slot}", ref head))
+        { s.CameraHeadLook = head; Touch(); }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("勾选 = 怎么看由下一项决定，但一走起来视线立刻收回、头回正目视前方。\n不勾选 = 同样由下一项决定，站定/行动都照它执行。");
+
+        var alwaysGaze = s.AlwaysGazeAtPlayer ?? M.AlwaysGazeAtPlayer;
+        if (ImGui.Checkbox($"始终注视玩家##walwaysgaze{_slot}", ref alwaysGaze))
+        { s.AlwaysGazeAtPlayer = alwaysGaze; Touch(); }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("勾选 = 一直看着你（行动中指头/眼视线，超出转幅时收回，绝不边走边转身）。\n不勾选 = 自然张望：按下面的占比与时长轮流看你 / 移开视线。");
+
+        // 自然张望参数（「始终注视玩家」不勾选时生效）。量程与主页一致。
+        if (!alwaysGaze && !never)
+        {
+            var lookPct = s.GazeLookPercent ?? M.GazeLookPercent;
+            ImGui.SetNextItemWidth(-1f);
+            if (ImGui.SliderFloat($"在看你占比##wgazepct{_slot}", ref lookPct, 0f, 100f, "%.0f%%"))
+            { s.GazeLookPercent = lookPct; Touch(); }
+
+            var lookMin = s.GazeLookMin ?? M.GazeLookMin;
+            ImGui.SetNextItemWidth(-1f);
+            if (ImGui.SliderFloat($"看你最短##wgazelookmin{_slot}", ref lookMin, 1f, 60f, "%.0f 秒"))
+            { s.GazeLookMin = MathF.Max(1f, lookMin); Touch(); }
+
+            var lookMax = s.GazeLookMax ?? M.GazeLookMax;
+            ImGui.SetNextItemWidth(-1f);
+            if (ImGui.SliderFloat($"看你最长##wgazelookmax{_slot}", ref lookMax, 2f, 120f, "%.0f 秒"))
+            { s.GazeLookMax = MathF.Max((s.GazeLookMin ?? M.GazeLookMin) + 1f, lookMax); Touch(); }
+
+            var awayMin = s.GazeAwayMin ?? M.GazeAwayMin;
+            ImGui.SetNextItemWidth(-1f);
+            if (ImGui.SliderFloat($"移开最短##wgazeawaymin{_slot}", ref awayMin, 1f, 60f, "%.0f 秒"))
+            { s.GazeAwayMin = MathF.Max(1f, awayMin); Touch(); }
+
+            var awayMax = s.GazeAwayMax ?? M.GazeAwayMax;
+            ImGui.SetNextItemWidth(-1f);
+            if (ImGui.SliderFloat($"移开最长##wgazeawaymax{_slot}", ref awayMax, 2f, 120f, "%.0f 秒"))
+            { s.GazeAwayMax = MathF.Max((s.GazeAwayMin ?? M.GazeAwayMin) + 1f, awayMax); Touch(); }
+
+            ImGui.TextDisabled($"自然张望：约 {s.GazeLookPercent ?? M.GazeLookPercent:0}% 的时间看你（每次 {s.GazeLookMin ?? M.GazeLookMin:0}~{s.GazeLookMax ?? M.GazeLookMax:0} 秒），\n其余移开视线（每次 {s.GazeAwayMin ?? M.GazeAwayMin:0}~{s.GazeAwayMax ?? M.GazeAwayMax:0} 秒）。");
+        }
+
+        if (never)
+            ImGui.EndDisabled();
+
+        if (ImGui.Checkbox($"始终不注视玩家##wnevergaze{_slot}", ref never))
+        { s.NeverGazeAtPlayer = never; Touch(); }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("勾选 = 她完全不看玩家（优先级最高，\n上面两项立即失效并置灰）。");
+
+        // 量程与主页一致：转幅 20~160、转身概率 0~100。
+        var headLimit = s.HeadTurnLimitDeg ?? M.HeadTurnLimitDeg;
+        ImGui.SetNextItemWidth(-1f);
+        if (ImGui.SliderFloat($"头眼转幅##wheadlimit{_slot}", ref headLimit, 20f, 160f, "%.0f°"))
+        { s.HeadTurnLimitDeg = headLimit; Touch(); }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("她与目标的角度超过这个值，头/眼就追不上了，\n才会触发「转身追」或「干脆不看」。");
+
+        var chance = s.TurnChancePercent ?? M.TurnChancePercent;
+        ImGui.SetNextItemWidth(-1f);
+        if (ImGui.SliderFloat($"超转幅时转身概率##wturnchance{_slot}", ref chance, 0f, 100f, "%.0f%%"))
+        { s.TurnChancePercent = chance; Touch(); }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("超出头眼转幅时，有多少概率选择「带动作地转身」。\n剩余概率为「干脆不看」。");
+
+        // ── 目标交互（与主页「目标交互」小节同位）──
+        SubLabel("目标交互");
+
+        var targetable = s.TargetableByPlayer ?? M.TargetableByPlayer;
+        if (ImGui.Checkbox($"可以被选中为目标（鼠标点选 / Tab）##wtargetable{_slot}", ref targetable))
+        { s.TargetableByPlayer = targetable; Touch(); }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("让她能被鼠标点击或 Tab 选中为目标。\n关闭则恢复默认的不可选中。\n「点她没反应时替游戏接上目标」是全局开关，在主 NPC 页调，对所有 NPC 生效。");
     }
 
     // ── 口型与动画（量程 1:1 照主页台词组的口型 + 高级组的转身速度）──
@@ -681,5 +794,75 @@ public sealed unsafe class SubNpcPanel
 
         if (bInherit)
             ImGui.EndDisabled();
+    }
+
+    // ── 动作（与主页「动作」区同交互：状态/停止/搜索/下拉试做，对准这个副 NPC）──
+
+    private string _actionQuery = string.Empty;
+    private string _actionPick  = string.Empty;
+    private string[] _actionNames = [];
+
+    private void DrawActions()
+    {
+        var mgr = _controller.SubNpcs;
+        var animator = _slot >= 0 ? mgr?.AnimatorOf(_slot) : null;
+
+        var state = !(_controller.SubNpcs?.IsAlive(_slot) ?? false) ? "（她不在场）"
+            : animator switch
+            {
+                { IsBusy: true }    => $"正在播：{animator.CurrentAction}",
+                { IsWalking: true } => "正在走路",
+                _                   => "站立中（待机）",
+            };
+
+        ImGui.TextUnformatted(state);
+
+        var canStop = (_controller.SubNpcs?.IsAlive(_slot) ?? false) && animator is { IsBusy: true };
+        ImGui.BeginDisabled(!canStop);
+        if (ImGui.Button($"停止动作##wstopact{_slot}"))
+            mgr?.StopAction(_slot);
+        ImGui.EndDisabled();
+
+        ImGui.Spacing();
+
+        // 表里的真实名字（本地化）。没召唤时也能先看，只是点了没反应。
+        var names = animator?.AvailableActions ?? [];
+        if (!ReferenceEquals(names, _actionNames))
+            _actionNames = names as string[] ?? names.ToArray();
+
+        if (_actionNames.Length == 0)
+        {
+            ImGui.TextDisabled("动作表没载入（召唤她之后就有了）。");
+            return;
+        }
+
+        ImGui.SetNextItemWidth(-1f);
+        ImGui.InputText($"搜索##wactq{_slot}", ref _actionQuery);
+
+        ImGui.SetNextItemWidth(-1f);
+        var preview = string.IsNullOrEmpty(_actionPick) ? "（选一个动作…）" : _actionPick;
+        if (ImGui.BeginCombo($"动作##wact{_slot}", preview))
+        {
+            for (var i = 0; i < _actionNames.Length; ++i)
+            {
+                var name = _actionNames[i];
+
+                if (!string.IsNullOrWhiteSpace(_actionQuery)
+                    && !name.Contains(_actionQuery, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (ImGui.Selectable($"{name}##wact{_slot}_{i}",
+                        string.Equals(name, _actionPick, StringComparison.Ordinal)))
+                {
+                    _actionPick = name;
+                    mgr?.PlayAction(_slot, name);
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+
+            ImGui.EndCombo();
+        }
+
+        ImGui.TextDisabled($"共 {_actionNames.Length} 个动作，来自 Emote 表（客户端本地化名）。");
     }
 }

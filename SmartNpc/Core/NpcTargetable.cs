@@ -412,11 +412,14 @@ internal static unsafe class NpcTargetable
 
     /// <summary>
     /// 每帧调用：捕捉玩家左键的**按下沿**，必要时替游戏把硬目标设成她。
+    /// v0.18.69.23 四轮：支持多 NPC（主 NPC + 副 NPC 一起参与）—— 左键沿只读一次，
+    /// 悬停 / 名牌命中谁就接管谁（单 NPC 场景行为与原版完全一致）。
     /// </summary>
-    /// <param name="npc">她的 GameObject*。</param>
-    public static void TickClick(GameObject* npc)
+    /// <param name="npcs">候选 NPC 的 GameObject* 列表（可为栈上数组）。</param>
+    /// <param name="count">候选数量（≤0 = 只维持鼠标沿状态）。</param>
+    public static void TickClick(GameObject** npcs, int count)
     {
-        if (npc == null)
+        if (npcs is null || count <= 0)
         {
             _mouseDown = false;
             return;
@@ -445,33 +448,46 @@ internal static unsafe class NpcTargetable
             if (ts == null)
                 return;
 
-            var self  = (nint)npc;
-            var hover = (nint)ts->MouseOverTarget == self;
-            var plate = (nint)ts->MouseOverNameplateTarget == self;
-
-            var sb = new StringBuilder();
-            sb.Append("悬停=").Append(hover ? "她" : "别的")
-              .Append(" 名牌=").Append(plate ? "她" : "别的")
-              .Append(" 点前=").Append((nint)ts->Target == self ? "她" : "别的");
-
-            if ((!hover && !plate) || (nint)ts->Target == self)
+            // 找"被悬停（悬停目标 / 名牌任一命中）且还不是硬目标"的那一个。
+            GameObject* hit = null;
+            for (var i = 0; i < count; ++i)
             {
-                FallbackLast = sb.Append(" → 未接管").ToString();
+                var npc = npcs[i];
+                if (npc is null)
+                    continue;
+
+                var self    = (nint)npc;
+                var hovered = (nint)ts->MouseOverTarget == self
+                           || (nint)ts->MouseOverNameplateTarget == self;
+
+                if (hovered && (nint)ts->Target != self)
+                {
+                    hit = npc;
+                    break;
+                }
+            }
+
+            if (hit is null)
+            {
+                FallbackLast = "悬停不在候选里 / 已是目标 → 未接管";
                 return;
             }
+
+            var selfHit = (nint)hit;
+            var sb = new StringBuilder();
 
             // ① 游戏自己的入口：SetHardTarget(GameObject*, bool, bool, int)
             var ok = false;
             try
             {
-                ok = ts->SetHardTarget(npc, true, true, 0);
+                ok = ts->SetHardTarget(hit, true, true, 0);
             }
             catch (Exception ex)
             {
                 sb.Append(" SetHardTarget抛错:").Append(ex.Message);
             }
 
-            var after1 = (nint)ts->Target == self;
+            var after1 = (nint)ts->Target == selfHit;
             sb.Append(" SetHardTarget=").Append(ok ? "真" : "假")
               .Append(" 点后=").Append(after1 ? "她" : "别的");
 
@@ -481,9 +497,9 @@ internal static unsafe class NpcTargetable
             {
                 try
                 {
-                    ts->Target = npc;
-                    ts->TargetObjectId = npc->GetGameObjectId();
-                    sb.Append(" 直写字段→").Append((nint)ts->Target == self ? "她" : "别的");
+                    ts->Target = hit;
+                    ts->TargetObjectId = hit->GetGameObjectId();
+                    sb.Append(" 直写字段→").Append((nint)ts->Target == selfHit ? "她" : "别的");
                 }
                 catch (Exception ex)
                 {
@@ -491,7 +507,7 @@ internal static unsafe class NpcTargetable
                 }
             }
 
-            if ((nint)ts->Target == self)
+            if ((nint)ts->Target == selfHit)
                 FallbackHits++;
 
             FallbackLast = sb.ToString();

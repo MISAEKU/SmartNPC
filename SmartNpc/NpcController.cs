@@ -1394,8 +1394,17 @@ public sealed unsafe class NpcController : IDisposable
 
             // v0.18.39 点击兜底：游戏认出"鼠标在她身上"却没把她设成硬目标时，
             // 我们替它把这一下接上（详见 NpcTargetable.TickClick 注释）。
-            if (_config?.TargetableByPlayer ?? true)
-                NpcTargetable.TickClick(npcGo);
+            // v0.18.69.23 四轮：副 NPC 一起参与 —— 左键沿只读一次，悬停谁就接管谁。
+            {
+                var clickList = stackalloc GameObject*[4];
+                var clickN = 0;
+                if (_config?.TargetableByPlayer ?? true)
+                    clickList[clickN++] = npcGo;
+                if (SubNpcs is not null)
+                    clickN += SubNpcs.FillTargetableList(clickList + clickN, 4 - clickN);
+                if (clickN > 0)
+                    NpcTargetable.TickClick(clickList, clickN);
+            }
 
             // v0.18.41 根因取证：记录「选中她 → 被游戏自动取消」的瞬间状态（纯日志）
             NpcTargetable.TraceDeselect(npcGo);

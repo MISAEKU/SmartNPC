@@ -689,6 +689,15 @@ public sealed class Configuration : IPluginConfiguration
             s.LipFlapSeconds        = s.LipFlapSeconds is { } v15 ? Clamp(v15, 0.05f, 0.6f) : null;
             s.WalkSpeedScale        = s.WalkSpeedScale is { } v16 ? Clamp(v16, 0.25f, 3f) : null;
             s.TurnPlaybackSpeed     = s.TurnPlaybackSpeed is { } v17 ? Clamp(v17, 0.25f, 3f) : null;
+
+            // v0.18.69.23 四轮：视线覆盖钳制（量程与主页一致）。
+            s.GazeLookPercent  = s.GazeLookPercent is { } v18 ? Clamp(v18, 0f, 100f) : null;
+            s.GazeLookMin      = s.GazeLookMin is { } v19 ? Clamp(v19, 1f, 120f) : null;
+            s.GazeLookMax      = s.GazeLookMax is { } v20 ? Clamp(v20, 2f, 180f) : null;
+            s.GazeAwayMin      = s.GazeAwayMin is { } v21 ? Clamp(v21, 1f, 120f) : null;
+            s.GazeAwayMax      = s.GazeAwayMax is { } v22 ? Clamp(v22, 2f, 180f) : null;
+            s.HeadTurnLimitDeg = s.HeadTurnLimitDeg is { } v23 ? Clamp(v23, 5f, 180f) : null;
+            s.TurnChancePercent = s.TurnChancePercent is { } v24 ? Clamp(v24, 0f, 100f) : null;
         }
     }
     /// <summary>
@@ -894,4 +903,42 @@ public sealed class SubNpcSetting
 
     /// <summary>转身动作播放速度（null = 跟随主 NPC）。</summary>
     public float? TurnPlaybackSpeed { get; set; }
+
+    // ── v0.18.69.23 四轮：头部视线 / 目标可选 / 换区重召唤（可空覆盖，null = 跟随主 NPC）──
+
+    /// <summary>站定时用头/视线看（走动时收回视线）（null = 跟随主 NPC）。</summary>
+    public bool? CameraHeadLook { get; set; }
+
+    /// <summary>始终注视玩家（注视频率开关）（null = 跟随主 NPC）。</summary>
+    public bool? AlwaysGazeAtPlayer { get; set; }
+
+    /// <summary>始终不注视玩家（优先级最高，勾 = 完全不看）（null = 跟随主 NPC）。</summary>
+    public bool? NeverGazeAtPlayer { get; set; }
+
+    /// <summary>自然张望：在看你占比 %（null = 跟随主 NPC）。</summary>
+    public float? GazeLookPercent { get; set; }
+
+    /// <summary>自然张望：一次"在看你"最短秒数（null = 跟随主 NPC）。</summary>
+    public float? GazeLookMin { get; set; }
+
+    /// <summary>自然张望：一次"在看你"最长秒数（null = 跟随主 NPC）。</summary>
+    public float? GazeLookMax { get; set; }
+
+    /// <summary>自然张望：一次"移开视线"最短秒数（null = 跟随主 NPC）。</summary>
+    public float? GazeAwayMin { get; set; }
+
+    /// <summary>自然张望：一次"移开视线"最长秒数（null = 跟随主 NPC）。</summary>
+    public float? GazeAwayMax { get; set; }
+
+    /// <summary>头眼转幅（度，超过才触发转身追/不看）（null = 跟随主 NPC）。</summary>
+    public float? HeadTurnLimitDeg { get; set; }
+
+    /// <summary>超转幅时转身追的概率 %（null = 跟随主 NPC）。</summary>
+    public float? TurnChancePercent { get; set; }
+
+    /// <summary>可以被玩家选中为目标（null = 跟随主 NPC）。</summary>
+    public bool? TargetableByPlayer { get; set; }
+
+    /// <summary>换区后自动重召唤（null = 跟随主 NPC）。</summary>
+    public bool? AutoRespawnAfterZoneChange { get; set; }
 }

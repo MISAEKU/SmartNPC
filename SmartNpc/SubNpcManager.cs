@@ -211,7 +211,7 @@ public sealed unsafe class SubNpcManager
         NpcTargetable.Apply(
             (GameObject*)handle.Address,
             (GameObject*)player.Address,
-            cfg.TargetableByPlayer,
+            setting.TargetableByPlayer ?? cfg.TargetableByPlayer,
             forceTrace: false,
             ourIndex: handle.ObjectIndex);
 
@@ -316,6 +316,18 @@ public sealed unsafe class SubNpcManager
         s.LipFlapSeconds           = null;
         s.WalkSpeedScale           = null;
         s.TurnPlaybackSpeed        = null;
+        s.CameraHeadLook           = null;
+        s.AlwaysGazeAtPlayer       = null;
+        s.NeverGazeAtPlayer        = null;
+        s.GazeLookPercent          = null;
+        s.GazeLookMin              = null;
+        s.GazeLookMax              = null;
+        s.GazeAwayMin              = null;
+        s.GazeAwayMax              = null;
+        s.HeadTurnLimitDeg         = null;
+        s.TurnChancePercent        = null;
+        s.TargetableByPlayer       = null;
+        s.AutoRespawnAfterZoneChange = null;
 
         SaveConfig();
         ApplySlotSettings(slot, forcePushIdle: true);
@@ -623,18 +635,22 @@ public sealed unsafe class SubNpcManager
         uint maxHp = 0, currentHp = 0;
         try { maxHp = player.MaxHp; currentHp = player.CurrentHp; } catch { }
 
+        // 玩家 EntityId（头部视线 SetHeadTarget 用；读失败置 0 = 视线闸门直接收回）。
+        uint playerEntityId = 0;
+        try { playerEntityId = player.EntityId; } catch { }
+
         for (var i = 0; i < _slots.Length; ++i)
         {
             if (i >= _config.SubNpcs.Count)
                 break;   // Sanitize 还没跑过（理论上不该发生），别越界
-            TickSlot(i, delta, playerAddress, playerPos, playerRot, territory, jobRow, maxHp, currentHp);
+            TickSlot(i, delta, playerAddress, playerPos, playerRot, territory, jobRow, maxHp, currentHp, playerEntityId);
         }
     }
 
     private void TickSlot(int slot, float delta, nint playerAddress, Vector3 playerPos,
                           float playerRotation, uint territory,
                           Lumina.Excel.RowRef<Lumina.Excel.Sheets.ClassJob>? jobRow,
-                          uint maxHp, uint currentHp)
+                          uint maxHp, uint currentHp, uint playerEntityId)
     {
         var rt = _slots[slot];
         var setting = _config!.SubNpcs[slot];
@@ -646,7 +662,8 @@ public sealed unsafe class SubNpcManager
             {
                 rt.RespawnTimer -= delta;
                 if (rt.RespawnTimer <= 0f && setting.Enabled
-                    && (_config.AutoRespawnAfterZoneChange || rt.StartupSummonPending))
+                    && ((setting.AutoRespawnAfterZoneChange ?? _config.AutoRespawnAfterZoneChange)
+                        || rt.StartupSummonPending))
                 {
                     // 启动召唤无视「换区自动重召唤」开关（那是换区通道的开关，见 69.20）；
                     // 手动送走的槽位两条通道都不走（Dismiss 已清零计时器）。
@@ -670,7 +687,7 @@ public sealed unsafe class SubNpcManager
                 _log.Information("[SmartNpc] 副 NPC {0} 对象失效（换区或被清理），稍后自动回来。", slot + 1);
                 NpcBalloon.Forget(rt.Npc.Address);
                 rt.Clear();
-                rt.RespawnTimer = _config.AutoRespawnAfterZoneChange
+                rt.RespawnTimer = (setting.AutoRespawnAfterZoneChange ?? _config.AutoRespawnAfterZoneChange)
                     ? Math.Clamp(_config.AutoRespawnDelay, 1f, 15f)
                     : 0f;
             }
@@ -707,7 +724,7 @@ public sealed unsafe class SubNpcManager
             NpcTargetable.Apply(
                 (GameObject*)handle.Address,
                 (GameObject*)playerAddress,
-                _config.TargetableByPlayer,
+                setting.TargetableByPlayer ?? _config.TargetableByPlayer,
                 forceTrace: false,
                 ourIndex: handle.ObjectIndex);
             rt.SettleTimer = SettleSeconds;
@@ -718,7 +735,9 @@ public sealed unsafe class SubNpcManager
         // 可选中 + 嗓音保持 + 气泡生命周期（各自喂各自的地址，互不干扰）。
         var npcGo   = (GameObject*)handle.Address;
         var playerGo = (GameObject*)playerAddress;
-        NpcTargetable.Apply(npcGo, playerGo, _config.TargetableByPlayer, ourIndex: handle.ObjectIndex);
+        NpcTargetable.Apply(npcGo, playerGo,
+            setting.TargetableByPlayer ?? _config.TargetableByPlayer,
+            ourIndex: handle.ObjectIndex);
 
         // 嗓音按槽位：跟随主 NPC 设置，或用槽位自己的嗓音编号（每帧保持，换装会冲掉）。
         var presetId = setting.VoiceInherit ? VoiceTuning.PresetId : Math.Clamp(setting.VoicePresetId, 0, 255);
@@ -787,6 +806,9 @@ public sealed unsafe class SubNpcManager
         rt.Animator.SetWalking(rt.Motion.IsMoving, rt.Motion.CurrentSpeed, rt.Motion.CurrentGait);
         rt.Animator.ApplyAuthority(rt.Motion.IsMoving, rt.Motion.CurrentSpeed, rt.Motion.CurrentGait);
 
+        // 头部视线（v0.18.69.23 四轮）：与主 NPC 同位置（ApplyAuthority 之后）、同一套状态机。
+        ApplyHeadLook(slot, delta, playerDist, playerPos, playerEntityId);
+
         // 待机小动作（与主 NPC 同一门控：玩家走时不插；闸门按槽位覆盖）。
         var blockWhileMoving = setting.BlockGesturesWhileMoving ?? _config.BlockGesturesWhileMoving;
         var playerMoving = _playerRawSpeed > 0.25f;
@@ -819,6 +841,237 @@ public sealed unsafe class SubNpcManager
 
         rt.Animator.UpdateLipSync(rt.Brain.IsSpeaking, delta);
         rt.Brain.Update(handle, playerPos, delta);
+    }
+
+    // ── v0.18.69.23 四轮：头部视线（与主 NPC ApplyHeadLook 同一套状态机，状态按槽位独立）──
+    //
+    // 核心 = 写 Character.TargetId 让游戏引擎自己做头/眼追踪（AnamCore.SetHeadTarget 同款）。
+    // 优先级（与主 NPC v0.18.32 最终裁定一致）：
+    //   ① 始终不注视玩家 → 完全不看；
+    //   ② 站定时用头/视线看 = 纯移动闸门（走动收回视线）；
+    //   ③ 始终注视玩家 = 注视频率（勾=一直看；不勾=占视周期，整段保持不逐帧重掷）。
+    // 全部旋钮读槽位覆盖（null = 主配置值）。
+
+    private static readonly Random GazeRng = new();
+
+    private void ApplyHeadLook(int slot, float delta, float playerDist, Vector3 playerPos, uint playerEntityId)
+    {
+        var rt = _slots[slot];
+        var s  = _config!.SubNpcs[slot];
+
+        if (rt.Npc is not { IsAlive: true } handle || handle.Address == nint.Zero)
+            return;
+
+        var character = (Character*)handle.Address;
+        var go        = (GameObject*)handle.Address;
+
+        // ①「始终不注视玩家」：最高优先级，直接完全关闭注视。
+        if (s.NeverGazeAtPlayer ?? _config.NeverGazeAtPlayer)
+        {
+            ClearHeadTarget(character);
+            rt.OverflowMode   = 0;
+            rt.OverflowTimer  = 0f;
+            rt.TurningActive  = false;
+            rt.TurningTimeout = 0f;
+            rt.GazeOn         = true;
+            rt.GazeTimer      = 0f;
+            return;
+        }
+
+        var standing     = !(rt.Motion?.IsMoving ?? false);
+        var standingGate = s.CameraHeadLook ?? _config.CameraHeadLook;
+
+        // ② 移动闸门：勾「站定时看」时，走动一律收回视线。
+        if (standingGate && !standing)
+        {
+            ClearHeadTarget(character);
+            rt.OverflowMode   = 0;
+            rt.OverflowTimer  = 0f;
+            rt.TurningActive  = false;
+            rt.TurningTimeout = 0f;
+            rt.GazeOn         = true;
+            rt.GazeTimer      = 0f;
+            return;
+        }
+
+        // 距离闸门（所有注视模式共用）。
+        if (playerDist > MotionTuning.HeadLookMaxDistance || playerEntityId == 0)
+        {
+            ClearHeadTarget(character);
+            rt.OverflowMode  = 0;
+            rt.OverflowTimer = 0f;
+            rt.GazeOn        = true;
+            rt.GazeTimer     = 0f;
+            return;
+        }
+
+        // ③ 注视频率：「始终注视玩家」勾 = 一直看；不勾 = 占视周期。
+        if (!(s.AlwaysGazeAtPlayer ?? _config.AlwaysGazeAtPlayer))
+        {
+            rt.GazeTimer -= delta;
+            if (rt.GazeTimer <= 0f)
+            {
+                var lookPct = Math.Clamp(s.GazeLookPercent ?? _config.GazeLookPercent, 0f, 100f);
+                var lookMin = MathF.Max(0.5f, s.GazeLookMin ?? _config.GazeLookMin);
+                var lookMax = MathF.Max(lookMin, s.GazeLookMax ?? _config.GazeLookMax);
+                var awayMin = MathF.Max(0.5f, s.GazeAwayMin ?? _config.GazeAwayMin);
+                var awayMax = MathF.Max(awayMin, s.GazeAwayMax ?? _config.GazeAwayMax);
+
+                if (GazeRng.Next(100) < lookPct)
+                {
+                    rt.GazeOn    = true;
+                    rt.GazeTimer = lookMin + (float)GazeRng.NextDouble() * (lookMax - lookMin);
+                }
+                else
+                {
+                    rt.GazeOn    = false;
+                    rt.GazeTimer = awayMin + (float)GazeRng.NextDouble() * (awayMax - awayMin);
+                }
+            }
+
+            if (!rt.GazeOn)
+            {
+                ClearHeadTarget(character);
+                rt.OverflowMode   = 0;
+                rt.OverflowTimer  = 0f;
+                rt.TurningActive  = false;   // 故意不看 → 进行中的转身也一并收掉
+                rt.TurningTimeout = 0f;
+                return;
+            }
+        }
+
+        // 她当前的朝向，与"要看向玩家"的朝向，差多少。
+        var toPlayer = MathF.Atan2(playerPos.X - go->Position.X, playerPos.Z - go->Position.Z);
+        var diff     = NormalizeAngle(toPlayer - go->Rotation);
+        var absDelta = MathF.Abs(diff);
+
+        // 头/眼转幅：度 → 弧度。
+        var headTurnLimit = MathF.Max(0.1f, (s.HeadTurnLimitDeg ?? _config.HeadTurnLimitDeg) * MathF.PI / 180f);
+
+        // 移动中绝不转身追：头/眼够得着就追、够不着就收回。
+        if (!standing)
+        {
+            if (absDelta <= headTurnLimit)
+                SetHeadTarget(character, playerEntityId);
+            else
+                ClearHeadTarget(character);
+
+            rt.OverflowMode  = 0;
+            rt.OverflowTimer = 0f;
+            return;
+        }
+
+        if (!rt.TurningActive)
+        {
+            if (absDelta <= headTurnLimit)
+            {
+                // 头/眼够得着：交给游戏引擎自己追踪。
+                SetHeadTarget(character, playerEntityId);
+                rt.OverflowMode  = 0;
+                rt.OverflowTimer = 0f;
+                return;
+            }
+
+            // 超出头/眼转幅：随机二选一（放弃追踪 / 转身追），决定保持住不逐帧重掷。
+            if (rt.OverflowTimer <= 0f)
+            {
+                var turnChance = Math.Clamp(s.TurnChancePercent ?? _config.TurnChancePercent, 0f, 100f);
+                rt.OverflowMode  = GazeRng.Next(100) < turnChance ? 2 : 1;
+                rt.OverflowTimer = MotionTuning.HeadOverflowHoldSeconds;
+                rt.OverflowDir   = diff > 0f ? 1 : -1;
+            }
+
+            rt.OverflowTimer -= delta;
+
+            if (rt.OverflowMode == 2)
+            {
+                rt.TurningActive  = true;
+                rt.TurningTimeout = MotionTuning.TurnMaxSeconds;
+            }
+        }
+        else
+        {
+            // 已经在转身：一直转到真的对上为止（迟滞），超时兜底防死循环。
+            rt.OverflowMode = 2;
+            rt.OverflowDir  = diff > 0f ? 1 : -1;
+
+            rt.TurningTimeout -= delta;
+
+            if (absDelta < MotionTuning.TurnDoneThreshold || rt.TurningTimeout <= 0f)
+            {
+                rt.TurningActive  = false;
+                rt.OverflowMode   = 0;
+                rt.OverflowTimer  = 0f;
+                rt.TurningTimeout = 0f;
+            }
+        }
+
+        if (rt.OverflowMode == 1)
+            ClearHeadTarget(character);                 // ① 放弃追踪
+        else
+            SetHeadTarget(character, playerEntityId);   // ② 转身追
+    }
+
+    /// <summary>照 AnamCore.SetHeadTarget：设 TargetId，游戏引擎自动做头/眼追踪。</summary>
+    private static void SetHeadTarget(Character* character, uint entityId)
+    {
+        character->TargetId.ObjectId = entityId;
+        character->TargetId.Type     = 0;
+    }
+
+    /// <summary>照 AnamCore.ClearHeadTarget：置 0xE0000000，头/眼回正。</summary>
+    private static void ClearHeadTarget(Character* character)
+    {
+        character->TargetId.ObjectId = 0xE0000000;
+        character->TargetId.Type     = 0;
+    }
+
+    // ── 动作试做（副页「动作」小节用，与主 NPC 页同交互）──
+
+    /// <summary>槽位动作表（没召唤 = 空表）。</summary>
+    public IReadOnlyList<string> AvailableActionsOf(int slot)
+        => slot >= 0 && slot < _slots.Length
+            ? _slots[slot].Animator?.AvailableActions ?? Array.Empty<string>()
+            : Array.Empty<string>();
+
+    /// <summary>槽位的动画器（动作区状态显示用；不在场也可能刚建好 = 非 null）。</summary>
+    public NpcAnimator? AnimatorOf(int slot)
+        => slot >= 0 && slot < _slots.Length ? _slots[slot].Animator : null;
+
+    /// <summary>对副 NPC 播一个动作（名字 = Emote 表的客户端本地化名）。</summary>
+    public void PlayAction(int slot, string name)
+    {
+        if (slot < 0 || slot >= _slots.Length || string.IsNullOrWhiteSpace(name))
+            return;
+        _slots[slot].Animator?.Play(name);
+    }
+
+    /// <summary>停止副 NPC 当前正在播的动作。</summary>
+    public void StopAction(int slot)
+    {
+        if (slot < 0 || slot >= _slots.Length)
+            return;
+        _slots[slot].Animator?.Stop();
+    }
+
+    /// <summary>
+    /// 把在场且「允许被选中」的副 NPC 填进点击兜底的候选列表（v0.18.69.23 四轮）。
+    /// 由主控制器每帧调用；返回填进去的数量。
+    /// </summary>
+    public int FillTargetableList(GameObject** list, int capacity)
+    {
+        if (_config is null || list is null || capacity <= 0)
+            return 0;
+
+        var n = 0;
+        for (var i = 0; i < _slots.Length && i < _config.SubNpcs.Count && n < capacity; ++i)
+        {
+            var rt = _slots[i];
+            if (rt.Npc is { IsAlive: true }
+                && (_config.SubNpcs[i].TargetableByPlayer ?? _config.TargetableByPlayer))
+                list[n++] = (GameObject*)rt.Npc.Address;
+        }
+        return n;
     }
 
     // ── v0.18.69.23：按槽位的台词触发器（天气/时段/职业/战斗互动/表情回应）──
@@ -1157,6 +1410,16 @@ public sealed unsafe class SubNpcManager
         public float EmoteProbeTimer;   // 0.15s 节流
         public float EmoteReactCooldown;
 
+        // ── 头部视线状态机（v0.18.69.23 四轮，与主 NPC 同名状态各自的份）──
+        // 0=没超转幅 1=放弃追踪 2=转身追（身体转）。
+        public int OverflowMode;
+        public float OverflowTimer;
+        public int OverflowDir;
+        public bool GazeOn = true;      // 「始终注视玩家」不勾时的占视状态
+        public float GazeTimer;
+        public bool TurningActive;      // 转身迟滞：转到位或超时前不掐
+        public float TurningTimeout;
+
         /// <summary>清空运行时（槽位配置保留）。</summary>
         public void Clear()
         {
@@ -1186,6 +1449,15 @@ public sealed unsafe class SubNpcManager
             CloseHold   = 0f;
             LastPlayerEmoteId = 0;
             EmoteReactCooldown = 0f;
+
+            // 视线状态一并重置（与主 NPC 语义一致：新的一局从"在看你"开始）。
+            OverflowMode   = 0;
+            OverflowTimer  = 0f;
+            OverflowDir    = 0;
+            GazeOn         = true;
+            GazeTimer      = 0f;
+            TurningActive  = false;
+            TurningTimeout = 0f;
         }
     }
 }
