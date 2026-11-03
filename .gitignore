@@ -1,0 +1,28 @@
+# ===== 构建产物 =====
+bin/
+obj/
+dist/
+*.user
+
+# ===== 版本快照与开发工具（本地专用，不入库） =====
+.snapshots/
+_re/
+tools/
+_old_bin_*/
+HANDOVER.md
+README-DEV.md
+
+# ===== 开发日志与临时文件 =====
+*.log
+*.log.*
+*.tspack
+*.csx
+*.txt
+!README.md
+6
+list_types.py
+SmartNpc-v*.zip
+install.cmd
+
+# ===== 生成的清单（bin 内由 DalamudPackager 生成） =====
+packages.lock.json

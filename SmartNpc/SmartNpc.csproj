@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+
+  <!--
+    Dalamud API Level 15 / FFXIV 7.5 / .NET 10
+    把 SDK 版本改成对应的大版本号即可适配别的 API Level（如 14.0.0）。
+
+    程序集来源：默认找国际服 %APPDATA%\XIVLauncher\...，
+    下面这段在默认路径不存在时回退到国服 XIVLauncherCN，或环境变量 DALAMUD_HOME。
+
+    ⚠️ 第二个坑：Dalamud.NET.Sdk 的 Sdk.props 在设置 DalamudLibPath 的同一段里
+    就把 AssemblySearchPaths 展开成了字面量 —— 只改 DalamudLibPath 不改
+    AssemblySearchPaths 的话，引用仍会去国际服目录找，报 MSB3245 + 一片 CS0246。
+    国服环境下必须两行都写。
+  -->
+  <PropertyGroup>
+    <CnDalamudLibPath>$(appdata)\XIVLauncherCN\addon\Hooks\dev\</CnDalamudLibPath>
+    <DalamudLibPath Condition="!Exists('$(DalamudLibPath)') AND Exists('$(CnDalamudLibPath)')">$(CnDalamudLibPath)</DalamudLibPath>
+    <AssemblySearchPaths Condition="Exists('$(CnDalamudLibPath)')">$(AssemblySearchPaths);$(CnDalamudLibPath)</AssemblySearchPaths>
+  </PropertyGroup>
+
+  <Target Name="SmartNpcReportDalamudPath" BeforeTargets="BeforeBuild">
+    <Message Text="SmartNpc: 使用 Dalamud 程序集目录 = $(DalamudLibPath)" Importance="high" />
+  </Target>
+
+  <PropertyGroup>
+    <Version>0.18.69.19</Version>
+    <AssemblyName>SmartNpc</AssemblyName>
+    <RootNamespace>SmartNpc</RootNamespace>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- 以下是会被 DalamudPackager 写进 SmartNpc.json 的字段 -->
+    <Author>MISAEKU</Author>
+    <Name>Smart Npc</Name>
+    <Punchline>凭空造一个会跟着你的智能 NPC，可换装、可做表情动作、会自己说话。</Punchline>
+    <Description>用游戏自身的 ClientObjectManager 凭空创建一个 NPC actor，改成人类外观后跟随玩家。
+
+设计原则（纯视觉，不碰游戏内容）：不参与战斗、制作、任务等任何实际流程；NPC 只做视觉表现；销毁走游戏自己的 DeleteObjectByIndex，不私自 free 任何原生对象。v0.18.55 起可选接入 Penumbra 个人分组（引用官方 Penumbra.Api 发起调用，不注册任何 IPC 提供端）：召唤时把她挂进用户选定的 collection，让指定 mod 只对她一个人生效，送走时自动解绑。
+
+功能：凭空创建与销毁 NPC；人类外观，可读取 Glamourer 设计换装；可选 Penumbra 个人分组（mod 单独作用于她）；速度分级跟随（走 2.2 / 跑 4.6 米每秒，带加减速与迟滞）；自主行为（在附近自己挑地方游荡、走动、绕行、停顿、环顾，而不是死板粘在身后）；被柱子挡住会自动侧向绕行；情境反应（你在战斗、采集制作、或把她甩开时她会开口）；表情与动作；可选站立待机姿势（玩家 /pose 的姿势一~六）；人格与台词。</Description>
+    <RepoUrl>https://github.com/MISAEKU/SmartNPC</RepoUrl>
+    <Tags>npc;companion;pet;glamour;cosmetic;roleplay</Tags>
+    <CategoryTags>other</CategoryTags>
+  </PropertyGroup>
+
+  <!--
+    Penumbra.Api（v0.18.55 个人分组用）：
+    Dalamud IPC 要求订阅端与提供端泛型类型完全一致，Penumbra 所有改状态的接口
+    返回值里带自定义枚举 PenumbraApiEc —— 手写通道名无法匹配，必须引用官方 Api。
+    路径指向本机已安装的 Penumbra（只当编译引用；运行时 Penumbra 没装也只是功能降级，不会崩）。
+  -->
+  <ItemGroup Condition="Exists('$(appdata)\XIVLauncherCN\installedPlugins\Penumbra\1.7.2.4\Penumbra.Api.dll')">
+    <Reference Include="Penumbra.Api">
+      <HintPath>$(appdata)\XIVLauncherCN\installedPlugins\Penumbra\1.7.2.4\Penumbra.Api.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- IpcSubscribers 的基类 FuncSubscriber/ActionSubscriber 在 Luna.dll 里（Penumbra 自带，进程内已加载）。 -->
+    <Reference Include="Luna">
+      <HintPath>$(appdata)\XIVLauncherCN\installedPlugins\Penumbra\1.7.2.4\Luna.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
