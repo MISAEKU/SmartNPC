@@ -727,6 +727,10 @@ public sealed unsafe class SubNpcManager
                 setting.TargetableByPlayer ?? _config.TargetableByPlayer,
                 forceTrace: false,
                 ourIndex: handle.ObjectIndex);
+
+            // v0.18.69.23 五轮：点亮刚完成 —— 模型重建可能已把名字缓冲盖回默认名，
+            // 立刻补写一次（下一帧名牌就跟着配置名走）。
+            rt.NameCheckTimer = 0f;
             rt.SettleTimer = SettleSeconds;
             rt.AnimWait    = 0f;
             return;
@@ -745,10 +749,22 @@ public sealed unsafe class SubNpcManager
             NpcVoice.ApplyPreset((Character*)handle.Address, presetId);
         NpcBalloon.Tick((Character*)handle.Address);
 
+        // ── 名字重申（v0.18.69.23 五轮，用户反馈「头上的 ID 没跟着她起的名字」）──
+        // 召唤时只写一次会被后续的模型重建/换装盖掉：每 0.5s 读回名字缓冲核对，
+        // 不等于配置名（留空 = 游戏分配的默认名）就补写。读比对是纯内存操作，开销可忽略。
+        rt.NameCheckTimer -= delta;
+        if (rt.NameCheckTimer <= 0f)
+        {
+            rt.NameCheckTimer = 0.5f;
+            var wantedName = NpcNaming.EffectiveName(setting.Name, handle.GameAssignedName);
+            if (!string.Equals(NpcNaming.ReadName(handle.Address), wantedName, StringComparison.Ordinal))
+                NpcNaming.WriteName(handle.Address, wantedName);
+        }
+
         if (rt.Motion is null || rt.Animator is null || rt.Brain is null || rt.Behaviour is null)
             return;
 
-        // ── 决策 → 执行（与主 NPC 同一套三层，副 NPC 没有头/眼注视层）──
+        // ── 决策 → 执行（与主 NPC 同一套三层；头部视线见下方 ApplyHeadLook）──
         var here       = NpcMotion.ToNumerics(npcGo->Position);
         var toPlayer   = playerPos - here;
         var playerDist = new Vector3(toPlayer.X, 0f, toPlayer.Z).Length();
@@ -1420,6 +1436,10 @@ public sealed unsafe class SubNpcManager
         public bool TurningActive;      // 转身迟滞：转到位或超时前不掐
         public float TurningTimeout;
 
+        // ── 名字重申（v0.18.69.23 五轮）──
+        // 名字缓冲会被点亮/模型重建盖回默认名：每 0.5s 核对一次，被盖就补写。
+        public float NameCheckTimer;
+
         /// <summary>清空运行时（槽位配置保留）。</summary>
         public void Clear()
         {
@@ -1458,6 +1478,7 @@ public sealed unsafe class SubNpcManager
             GazeTimer      = 0f;
             TurningActive  = false;
             TurningTimeout = 0f;
+            NameCheckTimer = 0f;
         }
     }
 }
