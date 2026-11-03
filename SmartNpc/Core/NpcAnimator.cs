@@ -139,6 +139,15 @@ public sealed unsafe class NpcAnimator
     /// </summary>
     public float IdleSwitchSeconds { get; set; } = 20f;
 
+    /// <summary>
+    /// 挂机模式（v0.18.69.21）：true 时冻结姿势自动切换/自动随机 ——
+    /// 挂机坐姿（坐下）不许被姿势系统换掉。由 NpcController 在进入/退出挂机时设置。
+    /// </summary>
+    public bool SuppressPoseAutoSwitch { get; set; }
+
+    /// <summary>当前是否处于挂机坐姿（供控制器做"坐姿被顶掉就重新坐下"的自愈判断）。</summary>
+    public bool AfkSitActive { get; private set; }
+
     private ushort _cfgPlayEmoteRow;  // 配置选的姿势（隐藏 Emote 行，0 = 默认待机）
     private ushort _cfgIdleLoop;      // 配置姿势的循环段时间轴（取消时 StopTimeline 用）
     private ushort _cfgIdleRow;       // 配置姿势序号（0 = 默认待机）
@@ -257,6 +266,41 @@ public sealed unsafe class NpcAnimator
             PlayByTimeline(startTl, "姿势起手", startDur);
 
         SchedulePoseCycle();
+    }
+
+    // ── v0.18.69.21 挂机坐姿 ─────────────────────────────────────
+
+    /// <summary>
+    /// 进入挂机坐姿：以「坐下」表情走姿势同款两段式（槽[1] 起手 → ④循环基底）。
+    /// 挂机期间 <see cref="SuppressPoseAutoSwitch"/> 冻结姿势自动切换，她会一直坐着。
+    /// </summary>
+    public bool EnterAfkSit(ushort playEmoteRow, ushort loopTimeline)
+    {
+        if (playEmoteRow == 0 || loopTimeline == 0)
+            return false;
+
+        if (_npc is not { IsAlive: true } || Frozen)
+            return false;
+
+        SuppressPoseAutoSwitch = true;
+        AfkSitActive           = true;
+        ExitPoseEmote("进入挂机坐姿前的清理");
+        _relaxed = true;                     // 坐下期间不再累积"放松"判定
+        EnterPoseEmote(playEmoteRow, loopTimeline, 0);
+        return true;
+    }
+
+    /// <summary>退出挂机坐姿：恢复姿势系统，回到默认待机，走放松计时重新进配置姿势。</summary>
+    public void ExitAfkSit()
+    {
+        if (!AfkSitActive)
+            return;                          // 没进过挂机坐姿，别误伤普通姿势状态
+
+        SuppressPoseAutoSwitch = false;
+        AfkSitActive           = false;
+        ExitPoseEmote("挂机结束");
+        _relaxed       = false;
+        _idleAutoTimer = 0f;
     }
 
     /// <summary>
@@ -1360,6 +1404,10 @@ public sealed unsafe class NpcAnimator
     /// </summary>
     private void UpdateIdleAutoRandom(float deltaTime)
     {
+        // 挂机模式：坐姿不许被姿势系统换掉，整个自动切换冻结（计时不清零，退出挂机后照常续）。
+        if (SuppressPoseAutoSwitch)
+            return;
+
         if (IsWalking)
         {
             _idleAutoTimer = 0f;

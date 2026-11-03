@@ -917,6 +917,32 @@ public sealed unsafe class ConfigWindow : Window
         if (ImGui.Checkbox("对战斗 / 生产有反应##react", ref react))
             _config.SceneReactions = react;
 
+        // ── v0.18.69.21 挂机模式 ──
+        SubLabel("挂机模式");
+
+        var afk = _config.AfkModeEnabled;
+        if (ImGui.Checkbox("你挂机时她坐下休息##afkmode", ref afk))
+        {
+            _config.AfkModeEnabled = afk;
+            _controller.ApplySettings(_config);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("你连续一段时间没有任何操作（不移动、无状态变化、无表情动作），\n"
+                           + "她就原地坐下并停止一切自动说话；你一动她立刻站起来恢复正常。\n"
+                           + "手动送走或换区会重新计时。");
+
+        var afkSecs = _config.AfkTimeoutSeconds;
+        if (ImGui.InputFloat("无操作阈值（秒）##afksecs", ref afkSecs, 10f, 60f, "%.0f"))
+        {
+            _config.AfkTimeoutSeconds = Math.Clamp(afkSecs, 1f, 3600f);
+            _controller.ApplySettings(_config);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("多少秒没操作算挂机：最小 1 秒，最大 1 小时（3600 秒）。\n默认 300 = 5 分钟。改动立即生效并重新计时。");
+
+        if (afk)
+            ImGui.TextDisabled($"挂机阈值：{_config.AfkTimeoutSeconds:0} 秒（{TimeSpan.FromSeconds(_config.AfkTimeoutSeconds).TotalMinutes:0.#} 分钟）。");
+
         SubLabel("目标交互");
 
         var targetable = _config.TargetableByPlayer;

@@ -44,6 +44,20 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public bool BehaviourEnabled { get; set; } = true;
 
+    // ───────────────────────── 挂机模式 ─────────────────────────
+
+    /// <summary>
+    /// 挂机模式总开关（v0.18.69.21）。
+    ///
+    /// 玩家连续 <see cref="AfkTimeoutSeconds"/> 秒没有任何操作（不移动、无状态变化、
+    /// 无表情动作）时，她原地<b>坐下</b>并<b>停止一切自动说话</b>（闲置闲聊、情境反应、
+    /// 天气/时段/战斗/职业台词、表情回应全部静默）；玩家一动立刻起身恢复正常。
+    /// </summary>
+    public bool AfkModeEnabled { get; set; } = true;
+
+    /// <summary>玩家无操作多少秒进入挂机模式。<b>1 秒 ~ 1 小时（3600 秒）</b>，默认 300 = 5 分钟。</summary>
+    public float AfkTimeoutSeconds { get; set; } = 300f;
+
     /// <summary>被拉开超过这个距离就<b>跑</b>着追（米）。</summary>
     public float RunDistance { get; set; } = 7.5f;
 
@@ -595,6 +609,7 @@ public sealed class Configuration : IPluginConfiguration
         SpawnOffsetSide      = Clamp(SpawnOffsetSide, -5f, 5f);
         FollowStrength       = Clamp(FollowStrength, 0.5f, 2.5f);
         AutoRespawnDelay    = Clamp(AutoRespawnDelay, 1f, 15f);
+        AfkTimeoutSeconds   = Clamp(AfkTimeoutSeconds, 1f, 3600f);   // 1 秒 ~ 1 小时
 
         // ── 自然张望参数 ──
         GazeLookPercent = Clamp(GazeLookPercent, 0f, 100f);

@@ -608,6 +608,8 @@ public sealed unsafe class NpcController : IDisposable
             return;
 
         _behaviour.Enabled          = BrainTuning.BehaviourEnabled;
+        if (_afkActive && _behaviour is not null)
+            _behaviour.Enabled = false;   // 挂机期间：面板改设置也不许恢复游荡/搭话
         _behaviour.RunDistance     = BehaviourTuning.RunDistance;
         _behaviour.WalkDistance    = BehaviourTuning.WalkDistance;
         _behaviour.StrayDistance   = BehaviourTuning.StrayDistance;
@@ -654,6 +656,34 @@ public sealed unsafe class NpcController : IDisposable
     /// <summary>插件启动后的一次性武装标记（v0.18.69.20 自动召唤）。首帧消费。</summary>
     private bool _autoSummonArmed = true;
 
+    // ── v0.18.69.21 挂机模式 ──
+    private bool _afkActive;                 // 当前是否处于挂机（她坐着、静音）
+    private float _afkIdleSeconds;           // 玩家无操作累计秒数
+    private Vector3 _afkLastPos;             // 上一帧玩家位置（位移 = 有操作）
+    private bool _afkPosValid;
+    private uint _afkLastCondBits;           // 上一帧玩家状态位快照（变化 = 有操作）
+    private ushort _afkSeenEmoteId;          // 上次见过的玩家表情（新表情 = 有操作）
+    private bool _afkBehaviourWasEnabled = true;
+    private ushort _afkSitRow;               // 「坐下」表情行号（进入时解析）
+    private ushort _afkSitLoop;              // 「坐下」循环段时间轴
+    private float _afkReassert;              // 坐姿自愈重试节流
+
+    /// <summary>挂机检测要盯的玩家状态：任何一个翻转都算"有操作"。</summary>
+    private static readonly ConditionFlag[] AfkWatchFlags =
+    [
+        ConditionFlag.InCombat,
+        ConditionFlag.Mounted,
+        ConditionFlag.Crafting,
+        ConditionFlag.ExecutingCraftingAction,
+        ConditionFlag.Gathering,
+        ConditionFlag.ExecutingGatheringAction,
+        ConditionFlag.Fishing,
+        ConditionFlag.OccupiedInEvent,
+        ConditionFlag.OccupiedInQuestEvent,
+        ConditionFlag.BetweenAreas,
+        ConditionFlag.WaitingForDuty,
+    ];
+
     public void Summon(bool announce = true)
     {
         if (HasNpc)
@@ -663,6 +693,7 @@ public sealed unsafe class NpcController : IDisposable
         }
 
         _respawnTimer = 0f;   // 任何一次召唤都取消等待中的自动重召唤
+        ResetAfkState();      // 重新召唤：挂机状态清零，重新计时
 
         if (!NpcFactory.TrySpawn(false, out var handle, out var error))
         {
@@ -796,6 +827,7 @@ public sealed unsafe class NpcController : IDisposable
     public void Dismiss()
     {
         _respawnTimer = 0f;   // 手动送走：绝不能被自动重召唤"复活"
+        ResetAfkState();
         _framework?.Update -= OnFrameworkUpdate;
 
         if (_npc is { } handle && handle.IsAlive)
@@ -1115,6 +1147,159 @@ public sealed unsafe class NpcController : IDisposable
             _log.Information("[SmartNpc]（还没有 NPC，无法说话）");
     }
 
+    // ── v0.18.69.21 挂机模式 ──────────────────────────────────────
+    //
+    // 检测：位置位移 / 状态位翻转 / 新表情动作，任一发生 = "玩家有操作"。
+    // 超时进入：她坐下（姿势同款两段式）+ 全部自动台词静默 + 行为系统停摆（不游荡不搭话）。
+    // 退出：玩家一动立刻起身，一切恢复。
+
+    /// <summary>每帧推进挂机检测。playerPos = 玩家当前位置。</summary>
+    private void TickAfkMode(Vector3 playerPos, float delta)
+    {
+        var activity = false;
+
+        // 1) 位置：位移超过 5cm 算操作
+        if (_afkPosValid && Vector3.DistanceSquared(playerPos, _afkLastPos) > 0.0025f)
+            activity = true;
+        _afkLastPos  = playerPos;
+        _afkPosValid = true;
+
+        // 2) 状态位：战斗/骑乘/采集/事件等任一翻转算操作
+        if (_condition is not null)
+        {
+            uint bits = 0;
+            for (var i = 0; i < AfkWatchFlags.Length; i++)
+                if (_condition[AfkWatchFlags[i]])
+                    bits |= 1u << i;
+            if (bits != _afkLastCondBits)
+            {
+                _afkLastCondBits = bits;
+                activity = true;
+            }
+        }
+
+        // 3) 玩家表情：Character+0x630 EmoteController+0x14 EmoteId（与表情回应同源）
+        var player = _objectTable?.LocalPlayer;
+        if (player is not null && player.Address != nint.Zero)
+        {
+            try
+            {
+                var emoteId = ((Character*)player.Address)->EmoteController.EmoteId;
+                if (emoteId != 0 && emoteId != _afkSeenEmoteId)
+                {
+                    _afkSeenEmoteId = emoteId;
+                    activity = true;
+                }
+            }
+            catch { /* 偏移异常时忽略表情源，位置/状态位仍在 */ }
+        }
+
+        if (activity)
+        {
+            _afkIdleSeconds = 0f;
+            if (_afkActive)
+                ExitAfk("玩家恢复操作");
+            return;
+        }
+
+        if (_afkActive)
+        {
+            // 自愈：坐姿被任何原因顶掉（模型重建/表情槽被占）就重新坐下
+            _afkReassert -= delta;
+            if (_afkReassert <= 0f)
+            {
+                _afkReassert = 3f;
+                if (_animator is not null && _afkSitRow != 0
+                    && !_animator.AfkSitActive && !_animator.IsWalking)
+                {
+                    _log.Information("[SmartNpc] 挂机坐姿丢失，重新坐下。");
+                    _animator.EnterAfkSit(_afkSitRow, _afkSitLoop);
+                }
+            }
+            return;
+        }
+
+        if (!(_config?.AfkModeEnabled ?? false) || !HasNpc || player is null)
+            return;
+
+        _afkIdleSeconds += delta;
+        if (_afkIdleSeconds >= (_config?.AfkTimeoutSeconds ?? 300f))
+            EnterAfk();
+    }
+
+    private void EnterAfk()
+    {
+        _afkActive = true;
+        _afkReassert = 3f;
+
+        // 1) 台词全静默：切掉正在说的 + 关自动闲聊/配动作（NpcBrain 内建开关）
+        _brain?.CancelSpeaking();
+        if (_brain is not null)
+            _brain.SuppressGestureAndChatter = true;
+
+        // 2) 行为停摆：不游荡、不搭话、不做闲置小动作（Enabled=false 退回纯跟随，
+        //    玩家没动 = 她原地站着 = 正好坐下）
+        if (_behaviour is not null)
+        {
+            _afkBehaviourWasEnabled = _behaviour.Enabled;
+            _behaviour.Enabled = false;
+        }
+
+        // 3) 坐下：解析「坐下」表情行，走姿势同款两段式
+        _afkSitRow = 0;
+        _afkSitLoop = 0;
+        if (_animator is not null)
+        {
+            var row = _animator.FindEmoteRow("坐下");
+            if (row != 0)
+            {
+                _afkSitRow  = row;
+                _afkSitLoop = _animator.EmoteLoopTimelineOf(row);
+                if (!_animator.EnterAfkSit(_afkSitRow, _afkSitLoop))
+                    _log.Warning("[SmartNpc] 挂机坐姿启动失败（冻结期/不在场），稍后自愈重试。");
+            }
+            else
+            {
+                _log.Warning("[SmartNpc] 挂机模式：表情表里没找到「坐下」，只静音不坐下。");
+            }
+        }
+
+        _log.Information("[SmartNpc] 进入挂机模式（无操作 {0:F0} 秒）。", _config?.AfkTimeoutSeconds ?? 300f);
+        _chat?.Print($"[SmartNpc] 你已挂机，{_config?.NpcName ?? "她"} 坐下休息了（一动就会站起来）。");
+        Diag?.Write(BuildDiagnostics("进入挂机模式"));
+    }
+
+    private void ExitAfk(string reason)
+    {
+        _afkActive = false;
+        _afkIdleSeconds = 0f;
+
+        _brain?.CancelSpeaking();
+        if (_brain is not null)
+            _brain.SuppressGestureAndChatter = false;
+
+        if (_behaviour is not null)
+            _behaviour.Enabled = _afkBehaviourWasEnabled;
+
+        _animator?.ExitAfkSit();
+
+        _log.Information("[SmartNpc] 挂机结束（{0}）。", reason);
+        Diag?.Write(BuildDiagnostics("退出挂机模式：" + reason));
+    }
+
+    /// <summary>召唤/送走/换区：挂机状态整体清零（她重新计时，不会带着坐姿复活）。</summary>
+    private void ResetAfkState()
+    {
+        _afkActive      = false;
+        _afkIdleSeconds = 0f;
+        _afkPosValid    = false;
+        _afkSeenEmoteId = 0;
+        _afkSitRow      = 0;
+        _afkSitLoop     = 0;
+        _afkReassert    = 0f;
+        _animator?.ExitAfkSit();
+    }
+
     public void Emote(string name)
     {
         if (HasNpc && _animator is not null)
@@ -1428,6 +1613,7 @@ public sealed unsafe class NpcController : IDisposable
 
                 // ⚠️ v0.17.8：自动重召唤 —— 每次换区都要手动点一次太麻烦（用户反馈）。
                 // 等区域加载稳定后在玩家身边重新出现。
+                ResetAfkState();   // 换区：挂机坐姿/静音一并清零，重新计时
                 if (_config?.AutoRespawnAfterZoneChange ?? true)
                 {
                     _respawnTimer = Math.Clamp(_config?.AutoRespawnDelay ?? 3f, 1f, 15f);
@@ -1740,7 +1926,10 @@ public sealed unsafe class NpcController : IDisposable
         // ⚠️ 用 _wasTeleported 判"落后"：它在 NoticeTeleported 之后才被更新，
         // 这里读到的正是"这一帧刚发生了瞬移"，正是我们要的语义。
         // 放在最后，因为它依赖本帧算出的距离、行为状态与瞬移标记。
-        if (_brain is not null && _behaviour is not null)
+        // ── v0.18.69.21 挂机模式：先推进检测（可能刚进入/退出），再用它做台词闸门 ──
+        TickAfkMode(playerPos, FrameDelta);
+
+        if (_brain is not null && _behaviour is not null && !_afkActive)
         {
             // 她正在说话时保持当前情境不变，否则一句台词会被判成"情境变了"而打断。
             var lastScene = _brain.CurrentScene;
@@ -1761,10 +1950,14 @@ public sealed unsafe class NpcController : IDisposable
         // ── v0.18.50：天气 / 时段 / 战斗 / 互动 的台词触发 ──
         // 放在情境反应之后：那边是"大情境"，这边是"具体事件"，
         // 两边共用 NpcBrain 的说话通道，谁先谁后只影响同一帧里谁抢到嘴。
-        UpdateEnvironmentLines();
-        UpdateJobLines();
-        UpdateCombatAndTouchLines(here, playerPos, playerRotation, playerDist);
-        UpdatePlayerEmoteReaction();
+        // ⚠️ 挂机模式下全部静默（v0.18.69.21）——她坐着休息，一句话都不说。
+        if (!_afkActive)
+        {
+            UpdateEnvironmentLines();
+            UpdateJobLines();
+            UpdateCombatAndTouchLines(here, playerPos, playerRotation, playerDist);
+            UpdatePlayerEmoteReaction();
+        }
 
         // v0.18.53 说话开合：她此刻在不在说话由 NpcBrain 说了算，
         // 动画层只在**口型值真的变了**时才调游戏那个入口（绝不每帧写）。
