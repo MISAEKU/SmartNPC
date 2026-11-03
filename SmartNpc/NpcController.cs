@@ -1245,12 +1245,13 @@ public sealed unsafe class NpcController : IDisposable
             _behaviour.Enabled = false;
         }
 
-        // 3) 坐下：解析「坐下」表情行，走姿势同款两段式
+        // 3) 坐下：解析「坐下到地上」表情行（用户指定动作用词；找不到再退「坐下」），
+        //    走姿势同款两段式
         _afkSitRow = 0;
         _afkSitLoop = 0;
         if (_animator is not null)
         {
-            var row = _animator.FindEmoteRow("坐下");
+            var row = _animator.FindEmoteRow("坐下到地上", "地面坐下", "坐在地上", "坐下");
             if (row != 0)
             {
                 _afkSitRow  = row;
