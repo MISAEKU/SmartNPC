@@ -56,6 +56,12 @@ public sealed unsafe class SubNpcManager
     private float _playerSpeed;
     private float _playerRawSpeed;
 
+    /// <summary>
+    /// 启动自动召唤是否已武装过（v0.18.69.23）。
+    /// 首次进游戏世界那一帧武装一次：启用的槽位等一会儿自动召唤。
+    /// </summary>
+    private bool _autoSummonArmed;
+
     private readonly SubNpcRuntime[] _slots;
 
     public SubNpcManager(IPluginLog? log)
@@ -227,7 +233,8 @@ public sealed unsafe class SubNpcManager
             return;
 
         var rt = _slots[slot];
-        rt.RespawnTimer = 0f;   // 手动送走：取消等待中的自动重召唤
+        rt.RespawnTimer = 0f;             // 手动送走：取消等待中的自动重召唤
+        rt.StartupSummonPending = false;  // 手动送走：本次会话不再自动回来（与主 NPC 同语义）
 
         if (rt.Npc is { } handle && handle.IsAlive)
         {
@@ -566,6 +573,26 @@ public sealed unsafe class SubNpcManager
         if (player is null || player.Address == nint.Zero)
             return;
 
+        // ── 启动自动召唤（v0.18.69.23）：启用的槽位，本次启动进世界后自动叫出来 ──
+        // 与主 NPC 的「打开插件自动召唤」同一个总开关（AutoSummonOnLoad）；
+        // 首次检测到本地玩家那一帧武装一次，走既有的 RespawnTimer 通道（等世界加载稳定）。
+        if (!_autoSummonArmed)
+        {
+            _autoSummonArmed = true;
+
+            if (_config.AutoSummonOnLoad)
+            {
+                for (var i = 0; i < _slots.Length && i < _config.SubNpcs.Count; ++i)
+                {
+                    if (_config.SubNpcs[i].Enabled && _slots[i].Npc is null)
+                    {
+                        _slots[i].RespawnTimer         = Math.Clamp(_config.AutoRespawnDelay, 1f, 15f);
+                        _slots[i].StartupSummonPending = true;
+                    }
+                }
+            }
+        }
+
         var playerPos = player.Position;
 
         // 玩家实测速度（指数平滑，与主控制器同参数）。
@@ -618,8 +645,14 @@ public sealed unsafe class SubNpcManager
             if (rt.RespawnTimer > 0f)
             {
                 rt.RespawnTimer -= delta;
-                if (rt.RespawnTimer <= 0f && setting.Enabled && _config.AutoRespawnAfterZoneChange)
+                if (rt.RespawnTimer <= 0f && setting.Enabled
+                    && (_config.AutoRespawnAfterZoneChange || rt.StartupSummonPending))
+                {
+                    // 启动召唤无视「换区自动重召唤」开关（那是换区通道的开关，见 69.20）；
+                    // 手动送走的槽位两条通道都不走（Dismiss 已清零计时器）。
+                    rt.StartupSummonPending = false;
                     Summon(slot, announce: false);
+                }
             }
             return;
         }
@@ -1094,6 +1127,12 @@ public sealed unsafe class SubNpcManager
         public uint LastTerritory;
         public float RespawnTimer;
 
+        /// <summary>
+        /// 这次的自动重召唤来自「启动自动召唤」（无视换区重召唤开关）。
+        /// 手动送走 / 换区判死都会清掉 —— 只有启动武装的那一次有效。
+        /// </summary>
+        public bool StartupSummonPending;
+
         // 变更侦测（ApplySettings 即时生效用）。
         public int SeenPersona = -1;
         public int SeenIdleRow = -1;
@@ -1133,6 +1172,9 @@ public sealed unsafe class SubNpcManager
             WasActionBusy  = false;
             InvalidFrames  = 0;
             LastTerritory  = 0;
+
+            // 启动召唤的一次性武装到此为止（换区判死后走「换区自动重召唤」通道）。
+            StartupSummonPending = false;
 
             // 台词触发器状态一并重置 —— 重召唤后从"首次取样"重新开始。
             EnvPrimed  = false;

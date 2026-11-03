@@ -58,7 +58,8 @@ public sealed unsafe class SubNpcPanel
         var enabled = s.Enabled;
         if (ImGui.Checkbox($"启用槽位##subwen{_slot}", ref enabled))
         { s.Enabled = enabled; Touch(); }
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("启用后才能召唤这个槽位。");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("启用后才能召唤这个槽位。\n✅ 启用的槽位会在插件启动、进入游戏世界后自动召唤出来\n（跟随主 NPC 页「打开插件自动召唤」总开关；手动送走的本次会话不会再自动来）。");
 
         ImGui.SameLine();
         ImGui.TextDisabled(_controller.SubNpcs?.StatusText(_slot) ?? "？");
