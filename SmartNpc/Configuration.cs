@@ -657,7 +657,7 @@ public sealed class Configuration : IPluginConfiguration
             s.IdleEmoteName  = (s.IdleEmoteName ?? string.Empty).Trim();
             s.GlamourerDesignName = (s.GlamourerDesignName ?? string.Empty).Trim();
             s.FollowSide   = Clamp(s.FollowSide, -6f, 6f);
-            s.FollowBehind = Clamp(s.FollowBehind, 0.5f, 6f);
+            s.FollowBehind = Clamp(s.FollowBehind, -6f, 6f);   // 负值 = 站到玩家前面（与主 NPC 同规则）
 
             // v0.18.69.23：台词节奏 / 闲聊 / 姿势 / 语音 / 气泡（与主 NPC 同量级）
             s.MinIdleSeconds       = Clamp(s.MinIdleSeconds, 5, 600);
