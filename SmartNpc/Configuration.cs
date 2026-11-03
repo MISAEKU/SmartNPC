@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Dalamud.Configuration;
 
 namespace SmartNpc;
@@ -8,6 +9,17 @@ public sealed class Configuration : IPluginConfiguration
 {
     /// <summary>配置结构版本。以后加字段时递增，用于迁移。</summary>
     public int Version { get; set; } = 1;
+
+    // ───────────────────────── 副 NPC（v0.18.69.22）─────────────────────────
+
+    /// <summary>副 NPC 槽位上限。</summary>
+    public const int SubNpcSlotCount = 3;
+
+    /// <summary>
+    /// 副 NPC（随从）设置，最多 <see cref="SubNpcSlotCount"/> 个槽位。
+    /// 每个槽位可以有不同于主 NPC 的名字 / 性格 / 外观 / 称谓 / 待机姿势 / 站位。
+    /// </summary>
+    public List<SubNpcSetting> SubNpcs { get; set; } = new();
 
     // ───────────────────────── 移动与站位 ─────────────────────────
 
@@ -621,8 +633,33 @@ public sealed class Configuration : IPluginConfiguration
         // 嗓音 0 = 不改动（沿用继承来的）；行号 0 = 不发声。上限只防手滑填出离谱值。
         VoicePresetId = (int)Clamp(VoicePresetId, 0, 255);
         VoiceLineId   = (int)Clamp(VoiceLineId, 0, 9999);
-    }
 
+        // ── 副 NPC 槽位（v0.18.69.22）：始终补齐 3 槽，缺的字段安全回退默认值 ──
+        // 旧配置没有 SubNpcs → 反序列化成空列表 → 这里补齐；三槽默认侧向站位错开
+        // （不然三个副 NPC 会和主 NPC 叠在同一格）。
+        float[] defaultSides = [-1.6f, 1.6f, -2.8f];
+        while (SubNpcs.Count < SubNpcSlotCount)
+            SubNpcs.Add(new SubNpcSetting
+            {
+                FollowSide   = defaultSides[SubNpcs.Count % defaultSides.Length],
+                FollowBehind = 2.4f,
+            });
+        if (SubNpcs.Count > SubNpcSlotCount)
+            SubNpcs.RemoveRange(SubNpcSlotCount, SubNpcs.Count - SubNpcSlotCount);
+
+        for (var i = 0; i < SubNpcs.Count; ++i)
+        {
+            var s = SubNpcs[i];
+            s.Name        = (s.Name ?? string.Empty).Trim();
+            s.PlayerTitle = (s.PlayerTitle ?? string.Empty).Trim();
+            s.Persona     = Clamp(s.Persona, 0, 3);
+            s.IdleEmoteRowId = (int)Clamp(s.IdleEmoteRowId, 0, ushort.MaxValue);
+            s.IdleEmoteName  = (s.IdleEmoteName ?? string.Empty).Trim();
+            s.GlamourerDesignName = (s.GlamourerDesignName ?? string.Empty).Trim();
+            s.FollowSide   = Clamp(s.FollowSide, -6f, 6f);
+            s.FollowBehind = Clamp(s.FollowBehind, 0.5f, 6f);
+        }
+    }
     /// <summary>
     /// 永不抛的钳位：<c>min &gt; max</c> 时自动交换两端。
     ///
@@ -643,4 +680,44 @@ public sealed class Configuration : IPluginConfiguration
         if (min > max) (min, max) = (max, min);
         return Math.Clamp(value, min, max);
     }
+}
+
+/// <summary>
+/// 副 NPC（随从）槽位设置（v0.18.69.22）。
+///
+/// 与主 NPC 配置的同名字段语义一致；区别只在作用域 —— 只作用于这个槽位召唤出的那个 NPC。
+/// 「复制并使用主 NPC 设置」按钮会把主 NPC 的同名字段抄进来（站位偏移保留槽位自己的值）。
+/// </summary>
+[Serializable]
+public sealed class SubNpcSetting
+{
+    /// <summary>槽位是否启用（启用 = 允许召唤；不代表已召唤）。</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>她的名字（留空 = 显示游戏分配的默认名，与主 NPC 同规则）。</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>人格（0 安静 / 1 元气 / 2 傲娇 / 3 弱气，与主 NPC 同表同台词库）。</summary>
+    public int Persona { get; set; } = 1;
+
+    /// <summary>召唤后自动套用的 Glamourer 设计（Guid.Empty = 抄玩家外观，与主 NPC 同规则）。</summary>
+    public Guid GlamourerDesignId { get; set; }
+
+    /// <summary>设计名备份（列表里查不到时给 UI 回退显示）。</summary>
+    public string GlamourerDesignName { get; set; } = string.Empty;
+
+    /// <summary>她怎么称呼玩家（台词里的 {{称谓}}，留空 = 默认「主人」）。</summary>
+    public string PlayerTitle { get; set; } = "主人";
+
+    /// <summary>待机姿势（玩家 /pose 的姿势序号，0 = 游戏默认待机）。</summary>
+    public int IdleEmoteRowId { get; set; }
+
+    /// <summary>待机姿势显示名备份。</summary>
+    public string IdleEmoteName { get; set; } = string.Empty;
+
+    /// <summary>跟随站位：相对玩家的侧向偏移（米）。三槽默认错开，避免叠在同一格。</summary>
+    public float FollowSide { get; set; } = -1.6f;
+
+    /// <summary>跟随站位：站在玩家身后多远（米）。</summary>
+    public float FollowBehind { get; set; } = 2.4f;
 }

@@ -244,8 +244,23 @@ public sealed unsafe class NpcController : IDisposable
         try { _penumbra = new Core.PenumbraBridge(pi, _log); }
         catch (Exception ex) { _log.Error(ex, "[SmartNpc] Penumbra 桥接初始化失败，分组功能不可用。"); }
 
+        // v0.18.69.22：副 NPC（随从）管理器 —— 最多 3 个槽位，各持一套与主 NPC
+        // 同源的运行栈。由本控制器的每帧回调在**所有主 NPC 提前 return 之前**驱动。
+        SubNpcs = new SubNpcManager(_log);
+        SubNpcs.Attach(objectTable, clientState, chat, data, config, condition, _glamourer);
+        SubNpcs.ConfigSaveRequested = SaveConfig;
+
         _framework.Update += OnFrameworkUpdate;
     }
+
+    /// <summary>副 NPC（随从）管理器（v0.18.69.22，Attach 后可用）。</summary>
+    public SubNpcManager? SubNpcs { get; private set; }
+
+    /// <summary>副 NPC 管理器要落存档时借道这里（SaveConfig 是私有的，包一层）。</summary>
+    internal void SaveNow() => SaveConfig();
+
+    /// <summary>副 NPC 管理器在服务未注入时用的空日志（NullLog 是私有的，包一层）。</summary>
+    internal static IPluginLog NullLogForSub() => NullLog.Instance;
 
     public bool HasNpc => _npc is { IsAlive: true };
 
@@ -589,6 +604,9 @@ public sealed unsafe class NpcController : IDisposable
         }
 
         _nameSyncPrimed = true;
+
+        // ── v0.18.69.22：副 NPC 设置转发（内部有变更侦测，每帧调也无害）──
+        SubNpcs?.ApplySettings(config);
     }
 
     /// <summary>人格 → 跟随距离的倍率（不是覆盖，用户设定的距离是基准）。</summary>
@@ -1403,6 +1421,11 @@ public sealed unsafe class NpcController : IDisposable
             // 她不在了（送走 / 判死）—— 气泡必须跟着一起没，绝不能挂在野指针上。
             NpcBalloon.Tick(null);
         }
+
+        // ── 副 NPC 每帧驱动（v0.18.69.22）──
+        // ⚠️ 必须放在主 NPC 的所有提前 return 之前：主 NPC 不在场 / 点亮中 / 判死帧，
+        // 副 NPC 都要照常被驱动，否则主 NPC 一送走副 NPC 就全部僵住。
+        SubNpcs?.Tick(FrameDelta);
 
         // ── 插件加载自动召唤（v0.18.69.20）──
         // 首帧一次性武装：复用换区重召唤的 _respawnTimer 通道 —— 它天然满足全部约束：
@@ -2846,6 +2869,10 @@ public sealed unsafe class NpcController : IDisposable
         // 同步销毁：见 Plugin.Dispose 的注释（IFramework 是插件作用域的）。
         if (_framework is not null)
             _framework.Update -= OnFrameworkUpdate;
+
+        // v0.18.69.22：副 NPC 全部送走。
+        SubNpcs?.Dispose();
+        SubNpcs = null;
 
         if (_npc is { } handle && handle.IsAlive)
         {

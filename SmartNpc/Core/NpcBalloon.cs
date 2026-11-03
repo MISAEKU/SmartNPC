@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
@@ -36,8 +37,9 @@ internal static unsafe class NpcBalloon
 {
     private static readonly string FilePath = BuildPath();
 
-    private static nint     _owner;              // 当前气泡挂在谁身上（0 = 没有）
-    private static DateTime _closesAt = DateTime.MinValue;
+    // v0.18.69.22：多宿主 —— 主 NPC 与最多 3 个副 NPC 都可能同时说话，
+    // 单一 _owner 会互相顶掉气泡（后说的把先说的关了）。改按地址记一张到期表。
+    private static readonly Dictionary<nint, DateTime> _owners = new();
     private static DateTime _lastProbe = DateTime.MinValue;
 
     /// <summary>最近一次操作的结果（面板显示用）。</summary>
@@ -47,7 +49,7 @@ internal static unsafe class NpcBalloon
     public static string LastError { get; private set; } = string.Empty;
 
     /// <summary>气泡当前是否挂在她头上（面板显示用）。</summary>
-    public static bool IsOpen => _owner != nint.Zero;
+    public static bool IsOpen => _owners.Count > 0;
 
     private static string BuildPath()
     {
@@ -87,8 +89,7 @@ internal static unsafe class NpcBalloon
             //   三个 bool 仍按最保守的 false 传（实测 Flags 只置了 Valid=0x01，它们不是 flag 位）。
             c->YellBalloon.OpenBalloon(text, seconds, false, 0f, false, false, false, 0);
 
-            _owner    = (nint)c;
-            _closesAt = DateTime.UtcNow.AddSeconds(Math.Max(0.5f, seconds));
+            _owners[(nint)c] = DateTime.UtcNow.AddSeconds(Math.Max(0.5f, seconds));
 
             LastError   = string.Empty;
             LastSummary = $"已弹出 \"{Trim(text)}\"｜State={c->YellBalloon.State} " +
@@ -107,25 +108,30 @@ internal static unsafe class NpcBalloon
     }
 
     /// <summary>
-    /// 每帧推进：到点就收。换人（换区重召唤）也立刻收 —— 旧气泡不该跟着新对象。
+    /// 每帧推进：只服务传入的这个宿主 —— 到点就收。
+    /// v0.18.69.22 多宿主语义：<b>传 null 是安全的无操作</b>（主 NPC 不在场时主循环
+    /// 会传 null，绝不能因此收掉副 NPC 的气泡）；各 NPC 自己的循环喂自己的地址。
+    /// 宿主被销毁前必须调 <see cref="Forget"/> 摘掉记录，防止到点后写已释放的内存。
     /// </summary>
     public static void Tick(Character* c)
     {
-        if (_owner == nint.Zero)
+        if (c is null || _owners.Count == 0)
             return;
 
-        var now     = DateTime.UtcNow;
-        var expired = now >= _closesAt;
-        var changed = c == null || (nint)c != _owner;
+        var key = (nint)c;
+        if (!_owners.TryGetValue(key, out var closesAt))
+            return;
+
+        var now = DateTime.UtcNow;
 
         // 开着的时候每秒回读一次原生结构 —— 看它有没有真的从 Waiting 走到 Active。
         // 上次就是靠这行数据反推出参数传反了，留着以后排查。
-        if (!expired && !changed && _owner != nint.Zero && (now - _lastProbe).TotalSeconds >= 1.0)
+        if (now < closesAt && (now - _lastProbe).TotalSeconds >= 1.0)
         {
             _lastProbe = now;
             try
             {
-                var b = &((Character*)_owner)->YellBalloon;
+                var b = &c->YellBalloon;
                 Append($"存活中 State={b->State} PlayTimer={b->PlayTimer:0.00} Delay={b->DelayTime:0.00} " +
                        $"Flags=0x{(byte)b->Flags:X2}");
             }
@@ -133,13 +139,13 @@ internal static unsafe class NpcBalloon
             return;
         }
 
-        if (!expired && !changed)
+        if (now < closesAt)
             return;
 
         try
         {
-            ((Character*)_owner)->YellBalloon.CloseBalloon();
-            Append($"已收回（{(changed ? "对象已换" : "到点")}）");
+            c->YellBalloon.CloseBalloon();
+            Append("已收回（到点）");
         }
         catch (Exception ex)
         {
@@ -148,26 +154,37 @@ internal static unsafe class NpcBalloon
         }
         finally
         {
-            _owner = nint.Zero;
+            _owners.Remove(key);
         }
+    }
+
+    /// <summary>
+    /// 摘掉某个宿主的气泡记录（v0.18.69.22）。宿主对象即将被销毁时<b>必须</b>调用 ——
+    /// 否则到点回收那一下会写进已释放的 Character 内存。
+    /// </summary>
+    public static void Forget(nint owner)
+    {
+        if (owner != nint.Zero)
+            _owners.Remove(owner);
     }
 
     /// <summary>立刻收（她被送走 / 插件卸载 / 用户手动关）。</summary>
     public static void Hide()
     {
-        if (_owner == nint.Zero)
+        if (_owners.Count == 0)
             return;
 
-        try
+        foreach (var owner in _owners.Keys)
         {
-            ((Character*)_owner)->YellBalloon.CloseBalloon();
-            Append("已收回（手动）");
+            try
+            {
+                ((Character*)owner)->YellBalloon.CloseBalloon();
+            }
+            catch { /* 收不掉也不能影响别的 */ }
         }
-        catch { /* 收不掉也不能影响别的 */ }
-        finally
-        {
-            _owner = nint.Zero;
-        }
+
+        _owners.Clear();
+        Append("已全部收回（手动）");
     }
 
     private static string Trim(string s)
