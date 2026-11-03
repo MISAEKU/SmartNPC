@@ -21,6 +21,18 @@ FFXIV 国服（XIVLauncherCN）Dalamud 插件 · Dalamud API 15 / 游戏版本 7
 
 ## 下载安装
 
+### 方式一：第三方插件库（推荐，可自动更新）
+
+1. 打开游戏内 `/xlsettings`（或启动器设置）→ Dalamud → **第三方插件库**，填入：
+
+   ```
+   https://raw.githubusercontent.com/MISAEKU/DalamudPlugins/main/pluginmaster.json
+   ```
+
+2. 点击保存并重启游戏，在 `/xlplugins` → 插件安装 里搜索 **Smart Npc** 安装。
+
+### 方式二：手动安装
+
 1. 前往 [Releases](https://github.com/MISAEKU/SmartNPC/releases) 页面，下载最新版本的 `latest.zip`
 2. 将 `latest.zip` 解压到一个**固定目录**（例如 `%APPDATA%\XIVLauncherCN\devPlugins\SmartNPC`，目录里应有 `SmartNpc.dll` 与 `SmartNpc.json`）
 3. 打开启动器设置 → Dalamud → **开发插件位置**，添加上述目录（或 `/xlsettings` 内添加），重启游戏
