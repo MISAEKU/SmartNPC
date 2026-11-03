@@ -1204,13 +1204,16 @@ public sealed unsafe class NpcController : IDisposable
 
         if (_afkActive)
         {
-            // 自愈：坐姿被任何原因顶掉（模型重建/表情槽被占）就重新坐下
+            // 自愈：坐姿被任何原因顶掉（移动接管/模型重建/表情槽被占）就重新坐下。
+            // ⚠️ v0.18.69.21：判据用 PoseLoopActive（循环基底真非零）而不是
+            // AfkSitActive（自设标志，外力清坐姿后它仍是 true → 自愈永远不触发，
+            // 表现就是用户看到的"站起来之后没有任何动作"）。
             _afkReassert -= delta;
             if (_afkReassert <= 0f)
             {
-                _afkReassert = 3f;
+                _afkReassert = 2f;
                 if (_animator is not null && _afkSitRow != 0
-                    && !_animator.AfkSitActive && !_animator.IsWalking)
+                    && !_animator.PoseLoopActive && !_animator.IsWalking)
                 {
                     _log.Information("[SmartNpc] 挂机坐姿丢失，重新坐下。");
                     _animator.EnterAfkSit(_afkSitRow, _afkSitLoop);
@@ -1777,7 +1780,11 @@ public sealed unsafe class NpcController : IDisposable
 
                 var waitingAnim = !animReady && _animWait < AnimWaitMaxSeconds;
 
-                _motion.Paused = settling || waitingAnim
+                // v0.18.69.21：挂机中冻结移动驱动 —— Enabled=false 仍是「跟随」态，
+                // 她与跟随点有半米内偏差时会走两步微调 → ApplyAuthority 移动接管
+                // 清掉坐姿循环基底 → "坐下去又站起来"。挂机 = 钉在原地，自愈兜底。
+                _motion.Paused = _afkActive
+                                 || settling || waitingAnim
                                  || (_brain?.IsSpeaking ?? false) || actionBusy;
 
 

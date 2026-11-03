@@ -148,6 +148,14 @@ public sealed unsafe class NpcAnimator
     /// <summary>当前是否处于挂机坐姿（供控制器做"坐姿被顶掉就重新坐下"的自愈判断）。</summary>
     public bool AfkSitActive { get; private set; }
 
+    /// <summary>
+    /// v0.18.69.21：姿势循环**真在播**的物理判据 ——
+    /// <see cref="_poseFallbackBase"/>（④基底）或 <see cref="_activePoseLoop"/> 任一非零即成立。
+    /// ⚠️ 自愈判断必须用它而不是 <see cref="AfkSitActive"/>：后者是自设标志，
+    /// 坐姿被移动接管等外力清掉后它仍为 true，用它判"还在坐"会永远漏报。
+    /// </summary>
+    public bool PoseLoopActive => _poseFallbackBase != 0 || _activePoseLoop != 0;
+
     private ushort _cfgPlayEmoteRow;  // 配置选的姿势（隐藏 Emote 行，0 = 默认待机）
     private ushort _cfgIdleLoop;      // 配置姿势的循环段时间轴（取消时 StopTimeline 用）
     private ushort _cfgIdleRow;       // 配置姿势序号（0 = 默认待机）
