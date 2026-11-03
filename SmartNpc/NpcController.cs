@@ -651,6 +651,9 @@ public sealed unsafe class NpcController : IDisposable
     /// <summary>换区自动重召唤的倒计时（秒）。&gt;0 = 等待中；到 0 自动召唤。</summary>
     private float _respawnTimer;
 
+    /// <summary>插件启动后的一次性武装标记（v0.18.69.20 自动召唤）。首帧消费。</summary>
+    private bool _autoSummonArmed = true;
+
     public void Summon(bool announce = true)
     {
         if (HasNpc)
@@ -1210,6 +1213,20 @@ public sealed unsafe class NpcController : IDisposable
         {
             // 她不在了（送走 / 判死）—— 气泡必须跟着一起没，绝不能挂在野指针上。
             NpcBalloon.Tick(null);
+        }
+
+        // ── 插件加载自动召唤（v0.18.69.20）──
+        // 首帧一次性武装：复用换区重召唤的 _respawnTimer 通道 —— 它天然满足全部约束：
+        // 玩家未进世界不召唤（条件里有 LocalPlayer）、手动送走 Dismiss 清零即取消、
+        // 手动召唤 Summon 也清零即取消。之后与换区重召唤行为完全一致。
+        if (_autoSummonArmed)
+        {
+            _autoSummonArmed = false;
+            if (_config?.AutoSummonOnLoad == true && _respawnTimer <= 0f)
+            {
+                _respawnTimer = Math.Clamp(_config?.AutoRespawnDelay ?? 3f, 2f, 15f);
+                _log.Information("[SmartNpc] 自动召唤已武装：进游戏世界后 {0:F1}s 召唤。", _respawnTimer);
+            }
         }
 
         // ── 换区自动重召唤（v0.17.8）──

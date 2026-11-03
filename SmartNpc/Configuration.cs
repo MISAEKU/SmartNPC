@@ -456,6 +456,15 @@ public sealed class Configuration : IPluginConfiguration
     public float AutoRespawnDelay { get; set; } = 3f;
 
     /// <summary>
+    /// 插件加载后自动召唤（v0.18.69.20）。
+    ///
+    /// 进游戏世界后等 <see cref="AutoRespawnDelay"/> 秒自动把她召唤出来，
+    /// 不用每次手动 <c>/smartnpc summon</c>。手动送走（<c>/smartnpc dismiss</c>）
+    /// 后本次会话不会再自动召唤，下次启动插件才会。
+    /// </summary>
+    public bool AutoSummonOnLoad { get; set; } = true;
+
+    /// <summary>
     /// 卡住 / 跟不上多少秒后强制瞬移到你身边（秒）。<b>0 = 关闭</b>（v0.18.2）。
     ///
     /// <para>为什么需要它：避障被挡住时原本只有两条出路 ——

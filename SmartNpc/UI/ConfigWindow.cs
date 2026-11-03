@@ -180,7 +180,14 @@ public sealed unsafe class ConfigWindow : Window
         if (ImGui.Checkbox("换区后自动跟随##autorespawn", ref autoRespawn))
             _config.AutoRespawnAfterZoneChange = autoRespawn;
         if (ImGui.IsItemHovered())
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("开启：换区后她会自动在你身边重新出现，不用每次手动召唤。\n关闭：换区后提示你手动召唤。");
+            ImGui.SetTooltip("开启：换区后她会自动在你身边重新出现，不用每次手动召唤。\n关闭：换区后提示你手动召唤。");
+
+        // v0.18.69.20：打开插件自动召唤
+        var autoSummon = _config.AutoSummonOnLoad;
+        if (ImGui.Checkbox("打开插件自动召唤##autosummon", ref autoSummon))
+            _config.AutoSummonOnLoad = autoSummon;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("开启：进游戏后她会自动出现在你身边，不用每次手动召唤。\n手动送走后本次会话不会再自动召唤，下次启动插件才会。");
     }
 
     private void DrawDesignSection()

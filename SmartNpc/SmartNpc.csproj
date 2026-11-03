@@ -24,7 +24,7 @@
   </Target>
 
   <PropertyGroup>
-    <Version>0.18.69.19</Version>
+    <Version>0.18.69.20</Version>
     <AssemblyName>SmartNpc</AssemblyName>
     <RootNamespace>SmartNpc</RootNamespace>
     <Nullable>enable</Nullable>
