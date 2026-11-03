@@ -25,6 +25,7 @@ public sealed class Plugin : IDalamudPlugin
     private NpcController? _controller;
     private Configuration? _config;
     private ConfigWindow? _configWindow;
+    private SubNpcWindow[]? _subWindows;
     private readonly WindowSystem _windows = new("SmartNpcWindows");
     private Dalamud.Game.Gui.ContextMenu.MenuItem[]? _contextItems;
 
@@ -145,6 +146,26 @@ public sealed class Plugin : IDalamudPlugin
             PluginInterface.UiBuilder.Draw         += _windows.Draw;
             PluginInterface.UiBuilder.OpenConfigUi += win.Toggle;
             PluginInterface.UiBuilder.OpenMainUi   += win.Toggle;
+        });
+
+        // v0.18.69.23：每个副 NPC 一个独立设置窗口（主面板只留横栏，详细设置进这里）。
+        Try("创建副 NPC 窗口", () =>
+        {
+            _subWindows = new SubNpcWindow[Configuration.SubNpcSlotCount];
+            for (var i = 0; i < Configuration.SubNpcSlotCount; ++i)
+            {
+                var slot = i;   // 闭包捕获（foreach 变量在 C# 5+ 已安全，这里显式一份更稳）
+                var sub = new SubNpcWindow(slot, cfg, ctl);
+                _subWindows[slot] = sub;
+                _windows.AddWindow(sub);
+
+                if (slot == 0)
+                    ctl.OpenSubNpcRequested = s =>
+                    {
+                        if (s >= 0 && s < _subWindows.Length)
+                            _subWindows[s].Toggle();
+                    };
+            }
         });
 
         Try("注册右键菜单", () =>

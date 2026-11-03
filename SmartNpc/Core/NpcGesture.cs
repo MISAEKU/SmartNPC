@@ -335,8 +335,11 @@ public static class NpcGesture
     ///
     /// <para>已经把 <see cref="ChancePercent"/> 与 <see cref="MinGapSeconds"/> 两道闸算进去了，
     /// 调用方拿到非 null 就可以直接播。</para>
+    ///
+    /// <para>v0.18.69.22：<paramref name="chanceOverride"/> 允许按 NPC 覆盖命中概率
+    /// （副 NPC 槽位设置；null = 全局 <see cref="ChancePercent"/>。最小间隔仍是全局节奏）。</para>
     /// </summary>
-    public static string? Decide(NpcBrain.Persona persona, string line)
+    public static string? Decide(NpcBrain.Persona persona, string line, float? chanceOverride = null)
     {
         if (string.IsNullOrWhiteSpace(line))
             return null;
@@ -348,7 +351,7 @@ public static class NpcGesture
         if (_sinceLastGesture < MinGapSeconds)
             return null;
 
-        if (Rng.Next(100) >= (int)Math.Clamp(ChancePercent, 0f, 100f))
+        if (Rng.Next(100) >= (int)Math.Clamp(chanceOverride ?? ChancePercent, 0f, 100f))
             return null;
 
         _sinceLastGesture = 0f;

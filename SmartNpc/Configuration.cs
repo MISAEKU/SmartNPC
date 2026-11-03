@@ -658,6 +658,18 @@ public sealed class Configuration : IPluginConfiguration
             s.GlamourerDesignName = (s.GlamourerDesignName ?? string.Empty).Trim();
             s.FollowSide   = Clamp(s.FollowSide, -6f, 6f);
             s.FollowBehind = Clamp(s.FollowBehind, 0.5f, 6f);
+
+            // v0.18.69.23：台词节奏 / 闲聊 / 姿势 / 语音 / 气泡（与主 NPC 同量级）
+            s.MinIdleSeconds       = Clamp(s.MinIdleSeconds, 5, 600);
+            s.MaxIdleSeconds       = Clamp(s.MaxIdleSeconds, s.MinIdleSeconds, 1800);
+            s.LineCooldownSeconds  = Clamp(s.LineCooldownSeconds, 0f, 300f);
+            s.CloseTouchDistance   = Clamp(s.CloseTouchDistance, 0.05f, 8f);
+            s.IdleRelaxSeconds     = Clamp(s.IdleRelaxSeconds, 0f, 600f);
+            s.IdleSwitchSeconds    = Clamp(s.IdleSwitchSeconds, 5f, 600f);
+            s.VoicePresetId        = (int)Clamp(s.VoicePresetId, 0, 255);
+            s.VoiceLineId          = (int)Clamp(s.VoiceLineId, 0, 9999);
+            s.BalloonSeconds       = Clamp(s.BalloonSeconds, 0.5f, 30f);
+            s.GestureChancePercent = Clamp(s.GestureChancePercent, 0f, 100f);
         }
     }
     /// <summary>
@@ -720,4 +732,84 @@ public sealed class SubNpcSetting
 
     /// <summary>跟随站位：站在玩家身后多远（米）。</summary>
     public float FollowBehind { get; set; } = 2.4f;
+
+    // ── v0.18.69.23：以下全部与主 NPC 同名设置语义一致，但只作用于这个槽位 ──
+
+    /// <summary>是否让她自言自语（闲聊）。</summary>
+    public bool AutoChatter { get; set; } = true;
+
+    /// <summary>聊天栏也显示她说的话。</summary>
+    public bool ShowInChat { get; set; } = true;
+
+    /// <summary>两句自言自语之间的最短间隔（秒）。</summary>
+    public int MinIdleSeconds { get; set; } = 18;
+
+    /// <summary>两句自言自语之间的最长间隔（秒）。</summary>
+    public int MaxIdleSeconds { get; set; } = 40;
+
+    /// <summary>两句台词之间的全局最短间隔（秒，0 = 不冷却）。</summary>
+    public float LineCooldownSeconds { get; set; } = 12f;
+
+    /// <summary>贴到多近算「被靠近」（米）。</summary>
+    public float CloseTouchDistance { get; set; } = 2f;
+
+    /// <summary>对玩家的状态有反应（战斗 / 劳作 / 久站 / 落后时开口）。</summary>
+    public bool SceneReactions { get; set; } = true;
+
+    /// <summary>天气变了说一句。</summary>
+    public bool WeatherLines { get; set; } = true;
+
+    /// <summary>天气台词用游戏里那个真实名词。</summary>
+    public bool WeatherNameLines { get; set; } = true;
+
+    /// <summary>副本 / 特殊天气也开口。</summary>
+    public bool SpecialWeatherLines { get; set; }
+
+    /// <summary>时段变了说一句。</summary>
+    public bool DayPhaseLines { get; set; } = true;
+
+    /// <summary>战斗台词（进入 / 交战中 / 胜利 / 撤退）。</summary>
+    public bool CombatLines { get; set; } = true;
+
+    /// <summary>玩家互动台词（被选中 / 被注视 / 被靠近 / 受伤关心）。</summary>
+    public bool TouchLines { get; set; } = true;
+
+    /// <summary>玩家换了职业说一句相关的话（切换后只触发一次）。</summary>
+    public bool JobLines { get; set; } = true;
+
+    /// <summary>玩家选中她并做表情动作时回一句（必须当前目标是她）。</summary>
+    public bool EmoteReactions { get; set; } = true;
+
+    /// <summary>站立够久后自动随机换一个站立姿势。</summary>
+    public bool IdleAutoRandom { get; set; }
+
+    /// <summary>放松等待时间（秒）：停下后多久首次进入姿势。</summary>
+    public float IdleRelaxSeconds { get; set; } = 15f;
+
+    /// <summary>随机姿势切换间隔（秒）。</summary>
+    public float IdleSwitchSeconds { get; set; } = 20f;
+
+    /// <summary>语音与气泡跟随主 NPC 的设置（true 时下面的语音/气泡字段不生效）。</summary>
+    public bool VoiceInherit { get; set; } = true;
+
+    /// <summary>她说话时是否发声（仅 VoiceInherit=false 时生效）。</summary>
+    public bool VoiceEnabled { get; set; } = true;
+
+    /// <summary>嗓音编号（0 = 不改动；仅 VoiceInherit=false 时生效）。</summary>
+    public int VoicePresetId { get; set; }
+
+    /// <summary>语音行号（0 = 不发声；仅 VoiceInherit=false 时生效）。</summary>
+    public int VoiceLineId { get; set; }
+
+    /// <summary>头顶气泡跟随主 NPC 的设置（true 时下面两个字段不生效）。</summary>
+    public bool BalloonInherit { get; set; } = true;
+
+    /// <summary>她说话时头顶弹游戏原生气泡（仅 BalloonInherit=false 时生效）。</summary>
+    public bool BalloonEnabled { get; set; } = true;
+
+    /// <summary>气泡停留秒数（仅 BalloonInherit=false 时生效）。</summary>
+    public float BalloonSeconds { get; set; } = 4f;
+
+    /// <summary>台词配动作的概率（**%**。最小间隔是全局节奏，主面板调）。</summary>
+    public float GestureChancePercent { get; set; } = 72f;
 }

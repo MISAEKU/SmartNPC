@@ -136,24 +136,82 @@ public sealed unsafe class ConfigWindow : Window
         }
     }
 
-    // ── 副 NPC 随从（v0.18.69.22）────────────────────────────────
+    // ── 副 NPC 随从（v0.18.69.22；69.23 改横栏 + 独立窗口）────────
+    //
+    // 用户要求：别把所有设置都堆在一个页面里 —— 主面板只留紧凑横栏
+    //（启用 + 状态 + 召唤/送走 + 复制主设置 + 打开设置窗口），
+    // 全部详细设置按槽位进 SubNpcWindow（每个副 NPC 一个窗口）。
 
-    /// <summary>
-    /// 副 NPC 随从：最多 3 个槽位，每个可以有不同于主 NPC 的
-    /// 名字 / 性格 / 外观 / 称谓 / 待机姿势 / 站位。
-    /// 「复制并使用主 NPC 设置」一键把主 NPC 的设置抄进槽位（站位保留槽位自己的）。
-    /// </summary>
+    /// <summary>副 NPC 随从横栏：每槽一行，详细设置在各自独立窗口里。</summary>
     private void DrawSubNpcBlock()
     {
         if (_config.SubNpcs.Count < Configuration.SubNpcSlotCount)
             _config.Sanitize();   // 补齐 3 槽（正常情况下 Sanitize 已在 ApplyLiveSettings 跑过）
 
-        ImGui.TextDisabled("副 NPC 与主 NPC 各自独立：独立设置、独立跟随，一起跟着你走。换区后会自动回来。");
+        ImGui.TextDisabled("副 NPC 与主 NPC 各自独立：独立设置、独立跟随，一起跟着你走。换区后会自动回来。\n详细设置点「设置」打开她自己的窗口。");
         ImGui.Spacing();
 
-        var halfWidth = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
+        var quarterWidth = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X * 3f) * 0.25f;
+
+        for (var i = 0; i < Configuration.SubNpcSlotCount && i < _config.SubNpcs.Count; ++i)
+        {
+            var s     = _config.SubNpcs[i];
+            var alive = _controller.SubNpcs?.IsAlive(i) ?? false;
+            var name  = Core.NpcNaming.EffectiveName(s.Name, $"未命名 {i + 1}");
+
+            // ── 启用（召唤前提）──
+            var enabled = s.Enabled;
+            if (ImGui.Checkbox($"##subwen{i}", ref enabled))
+                s.Enabled = enabled;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("启用这个槽位（不启用无法召唤）。");
+
+            ImGui.SameLine();
+
+            // ── 状态行（名字 + 在场状态）──
+            var status = _controller.SubNpcs?.StatusText(i) ?? "？";
+            ImGui.TextUnformatted($"{i + 1}. {name}");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"{status}\n（改动名字去她的设置窗口）");
+
+            ImGui.SameLine();
+
+            if (alive)
+                ImGui.TextColored(new Vector4(0.45f, 0.85f, 0.5f, 1f), "●");
+
+            ImGui.SameLine();
+
+            // ── 召唤 / 送走 ──
+            var summonLabel = alive ? $"送走##subsum{i}" : $"召唤##subsum{i}";
+            ImGui.BeginDisabled(!s.Enabled && !alive);
+            if (ImGui.Button(summonLabel, new Vector2(quarterWidth, 0f)))
+            {
+                if (alive) _controller.SubNpcs!.Dismiss(i);
+                else       _controller.SubNpcs!.Summon(i);
+            }
+            ImGui.EndDisabled();
+
+            ImGui.SameLine();
+
+            // ── 复制并使用主 NPC 设置 ──
+            if (ImGui.Button($"复制主设置##subcopy{i}", new Vector2(quarterWidth, 0f)))
+                _controller.SubNpcs?.CopyFromMain(i);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("把主 NPC 的全部设置抄进这个槽位（站位偏移保留自己的）。\n语音 / 气泡置为「跟随主 NPC 设置」。她在场就立刻生效。");
+
+            ImGui.SameLine();
+
+            // ── 打开她的独立设置窗口 ──
+            if (ImGui.Button($"设置##subcfg{i}", new Vector2(quarterWidth, 0f)))
+                _controller.OpenSubNpcRequested?.Invoke(i);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("打开这个副 NPC 的设置窗口：\n名字 / 性格 / 称谓 / 外观 / 站位 / 台词开关与节奏 / 待机姿势 / 语音 / 气泡。");
+        }
+
+        ImGui.Spacing();
 
         // 全体快捷操作。
+        var halfWidth = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
         if (ImGui.Button("全部召唤", new Vector2(halfWidth, 0f)))
             for (var i = 0; i < Configuration.SubNpcSlotCount; ++i)
                 if (_config.SubNpcs[i].Enabled && !_controller.SubNpcs!.IsAlive(i))
@@ -161,149 +219,6 @@ public sealed unsafe class ConfigWindow : Window
         ImGui.SameLine();
         if (ImGui.Button("全部送走", new Vector2(halfWidth, 0f)))
             _controller.SubNpcs?.DismissAll();
-
-        ImGui.Spacing();
-
-        for (var i = 0; i < Configuration.SubNpcSlotCount && i < _config.SubNpcs.Count; ++i)
-        {
-            var s     = _config.SubNpcs[i];
-            var alive = _controller.SubNpcs?.IsAlive(i) ?? false;
-            var label = $"副 NPC {i + 1}（{Core.NpcNaming.EffectiveName(s.Name, "未命名")}）"
-                        + (alive ? " ●" : "");
-
-            if (!ImGui.TreeNode($"{label}##sub{i}"))
-                continue;
-
-            // ── 启用 + 召唤/送走 ──
-            var enabled = s.Enabled;
-            if (ImGui.Checkbox($"启用槽位##suben{i}", ref enabled))
-                s.Enabled = enabled;
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("启用后才能召唤这个槽位。\n召唤在下面按钮，或点「全部召唤」。");
-
-            ImGui.SameLine();
-            var status = _controller.SubNpcs?.StatusText(i) ?? "？";
-            ImGui.TextDisabled(status);
-
-            ImGui.Spacing();
-
-            var summonLabel = alive ? $"送走##subsum{i}" : $"召唤##subsum{i}";
-            if (ImGui.Button(summonLabel, new Vector2(halfWidth, 0f)))
-            {
-                if (alive) _controller.SubNpcs!.Dismiss(i);
-                else       _controller.SubNpcs!.Summon(i);
-            }
-
-            ImGui.SameLine();
-
-            // ★ 用户要求：复制并使用主 NPC 设置（站位偏移保留槽位自己的，避免叠在一起）。
-            if (ImGui.Button($"复制并使用主NPC设置##subcopy{i}", new Vector2(-1f, 0f)))
-                _controller.SubNpcs?.CopyFromMain(i);
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("把主 NPC 的 名字 / 性格 / 外观设计 / 称谓 / 待机姿势 抄进这个槽位。\n站位偏移保留槽位自己的值（三个副 NPC 不会叠在一起）。\n她在场就立刻生效。");
-
-            ImGui.Spacing();
-
-            // ── 名字 ──
-            var name = s.Name ?? string.Empty;
-            if (ImGui.InputText($"名字##subname{i}", ref name, 24))
-                s.Name = name;
-            ImGui.TextDisabled("留空 = 显示游戏分配的默认名。");
-
-            // ── 性格 ──
-            var persona = s.Persona;
-            ImGui.SetNextItemWidth(-1f);
-            if (ImGui.BeginCombo($"性格##subp{i}", PersonaNames[Math.Clamp(persona, 0, PersonaNames.Length - 1)]))
-            {
-                for (var p = 0; p < PersonaNames.Length; ++p)
-                {
-                    if (ImGui.Selectable($"{PersonaNames[p]}##subp{i}_{p}", persona == p))
-                        s.Persona = p;
-                }
-                ImGui.EndCombo();
-            }
-
-            // ── 称谓 ──
-            var title = s.PlayerTitle ?? string.Empty;
-            if (ImGui.InputText($"对你的称谓##subtitle{i}", ref title, 16))
-                s.PlayerTitle = title;
-            ImGui.TextDisabled("台词里的 {{称谓}} 会替换成这个。留空 = 「主人」。");
-
-            // ── 外观设计 ──
-            var designs = _controller.GetDesigns();
-            var designName = "（照抄玩家外观）";
-            if (s.GlamourerDesignId != Guid.Empty)
-            {
-                designName = s.GlamourerDesignName;
-                foreach (var (id, dn) in designs)
-                    if (id == s.GlamourerDesignId) { designName = dn; break; }
-            }
-
-            ImGui.SetNextItemWidth(-1f);
-            if (ImGui.BeginCombo($"外观##subdesign{i}", designName))
-            {
-                if (ImGui.Selectable($"（照抄玩家外观）##subnone{i}", s.GlamourerDesignId == Guid.Empty))
-                {
-                    s.GlamourerDesignId     = Guid.Empty;
-                    s.GlamourerDesignName   = string.Empty;
-                }
-
-                foreach (var (id, dn) in designs)
-                {
-                    if (!ImGui.Selectable($"{dn}##subd{i}{id}", id == s.GlamourerDesignId))
-                        continue;
-                    s.GlamourerDesignId   = id;
-                    s.GlamourerDesignName = dn;
-                }
-
-                ImGui.EndCombo();
-            }
-            if (designs.Count == 0)
-                ImGui.TextDisabled("没读到 Glamourer 设计，外观将照抄玩家。");
-
-            // ── 待机姿势 ──
-            var choices = _controller.GetIdleEmotes();
-            var idleName = "游戏默认待机";
-            if (s.IdleEmoteRowId != 0)
-            {
-                var match = choices.FirstOrDefault(c => c.EmoteRowId == s.IdleEmoteRowId);
-                idleName = match?.Name
-                           ?? (string.IsNullOrEmpty(s.IdleEmoteName) ? $"#{s.IdleEmoteRowId}" : s.IdleEmoteName);
-            }
-
-            ImGui.SetNextItemWidth(-1f);
-            if (ImGui.BeginCombo($"待机姿势##subidle{i}", idleName))
-            {
-                if (ImGui.Selectable($"游戏默认待机##subidleNone{i}", s.IdleEmoteRowId == 0))
-                {
-                    s.IdleEmoteRowId = 0;
-                    s.IdleEmoteName  = string.Empty;
-                }
-
-                foreach (var c in choices)
-                {
-                    if (!ImGui.Selectable($"{c.Name}##subidle{i}_{c.EmoteRowId}", c.EmoteRowId == s.IdleEmoteRowId))
-                        continue;
-                    s.IdleEmoteRowId = c.EmoteRowId;
-                    s.IdleEmoteName  = c.Name;
-                }
-
-                ImGui.EndCombo();
-            }
-
-            // ── 站位 ──
-            var side = Math.Clamp(s.FollowSide, -6f, 6f);
-            ImGui.SetNextItemWidth(-1f);
-            if (ImGui.SliderFloat($"侧向站位##subside{i}", ref side, -6f, 6f, "%.1f 米"))
-                s.FollowSide = side;
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("负 = 站你左手边，正 = 右手边。\n三个槽位默认错开，避免叠在同一格。");
-
-            var behind = Math.Clamp(s.FollowBehind, 0.5f, 6f);
-            ImGui.SetNextItemWidth(-1f);
-            if (ImGui.SliderFloat($"跟随距离##subbehind{i}", ref behind, 0.5f, 6f, "%.1f 米"))
-                s.FollowBehind = behind;
-
-            ImGui.TreePop();
-        }
     }
 
     // ── 分组 1：外观与召唤 ────────────────────────────────────────

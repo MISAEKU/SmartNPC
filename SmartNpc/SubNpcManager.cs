@@ -96,6 +96,12 @@ public sealed unsafe class SubNpcManager
         return "未召唤";
     }
 
+    /// <summary>槽位角色地址（不在场 = IntPtr.Zero。副 NPC 窗口的语音试听用）。</summary>
+    public nint NpcAddressOf(int slot)
+        => slot >= 0 && slot < _slots.Length && _slots[slot].Npc is { IsAlive: true } h
+            ? h.Address
+            : nint.Zero;
+
     // ───────────────────────── 召唤 / 送走 ─────────────────────────
 
     public void Summon(int slot, bool announce = true)
@@ -256,6 +262,31 @@ public sealed unsafe class SubNpcManager
         s.IdleEmoteName     = main.IdleEmoteName;
         // FollowSide / FollowBehind 保留槽位自己的值 —— 三个副 NPC 都抄过去会叠在同一格。
 
+        // v0.18.69.23：台词开关 / 节奏 / 姿势 / 动作概率全部抄齐（功能对齐）。
+        s.AutoChatter          = main.AutoChatter;
+        s.ShowInChat           = main.ShowInChat;
+        s.MinIdleSeconds       = main.MinIdleSeconds;
+        s.MaxIdleSeconds       = main.MaxIdleSeconds;
+        s.LineCooldownSeconds  = main.LineCooldownSeconds;
+        s.CloseTouchDistance   = main.CloseTouchDistance;
+        s.SceneReactions       = main.SceneReactions;
+        s.WeatherLines         = main.WeatherLines;
+        s.WeatherNameLines     = main.WeatherNameLines;
+        s.SpecialWeatherLines  = main.SpecialWeatherLines;
+        s.DayPhaseLines        = main.DayPhaseLines;
+        s.CombatLines          = main.CombatLines;
+        s.TouchLines           = main.TouchLines;
+        s.JobLines             = main.JobLines;
+        s.EmoteReactions       = main.EmoteReactions;
+        s.IdleAutoRandom       = main.IdleAutoRandom;
+        s.IdleRelaxSeconds     = main.IdleRelaxSeconds;
+        s.IdleSwitchSeconds    = main.IdleSwitchSeconds;
+        s.GestureChancePercent = main.GestureChancePercent;
+
+        // 语音 / 气泡先置为「跟随主 NPC 设置」—— 用户想单独调再在窗口里取消继承。
+        s.VoiceInherit   = true;
+        s.BalloonInherit = true;
+
         SaveConfig();
         ApplySlotSettings(slot, forcePushIdle: true);
         ApplySlotDesign(slot, announce: true);
@@ -315,6 +346,42 @@ public sealed unsafe class SubNpcManager
                     ? NpcLines.DefaultTitle
                     : s.PlayerTitle.Trim();
             }
+
+            // 台词节奏 / 闲聊 / 语音 / 气泡 / 姿势节奏：属性直推（无副作用，每帧推也无害）。
+            PushPresentation(i);
+        }
+    }
+
+    /// <summary>把"呈现层"的按槽位设置推下去（台词节奏/闲聊/语音/气泡/姿势节奏）。</summary>
+    private void PushPresentation(int slot)
+    {
+        if (_config is null || slot >= _config.SubNpcs.Count)
+            return;
+
+        var rt = _slots[slot];
+        var s  = _config.SubNpcs[slot];
+
+        if (rt.Brain is not null)
+        {
+            rt.Brain.AutoChatter    = s.AutoChatter;
+            rt.Brain.MinIdleSeconds = s.MinIdleSeconds;
+            rt.Brain.MaxIdleSeconds = s.MaxIdleSeconds;
+            rt.Brain.ShowInChat     = s.ShowInChat;
+            rt.Brain.LineCooldownSeconds = Math.Max(0f, s.LineCooldownSeconds);
+            rt.Brain.NearChatDistance    = Math.Clamp(s.CloseTouchDistance, 0.3f, 8f);
+
+            rt.Brain.VoiceEnabledOverride   = s.VoiceInherit ? null : s.VoiceEnabled;
+            rt.Brain.VoiceLineIdOverride    = s.VoiceInherit ? null : Math.Clamp(s.VoiceLineId, 0, 9999);
+            rt.Brain.BalloonEnabledOverride = s.BalloonInherit ? null : s.BalloonEnabled;
+            rt.Brain.BalloonSecondsOverride = s.BalloonInherit ? null : Math.Clamp(s.BalloonSeconds, 0.5f, 30f);
+            rt.Brain.GestureChanceOverride  = Math.Clamp(s.GestureChancePercent, 0f, 100f);
+        }
+
+        if (rt.Animator is not null)
+        {
+            rt.Animator.IdleRelaxSeconds  = Math.Clamp(s.IdleRelaxSeconds, 0f, 600f);
+            rt.Animator.IdleSwitchSeconds = Math.Clamp(s.IdleSwitchSeconds, 5f, 600f);
+            rt.Animator.IdleAutoRandom    = s.IdleAutoRandom;
         }
     }
 
@@ -359,16 +426,24 @@ public sealed unsafe class SubNpcManager
 
         if (rt.Brain is not null)
         {
-            rt.Brain.AutoChatter    = BrainTuning.AutoChatter;
-            rt.Brain.MinIdleSeconds = BrainTuning.MinIdleSeconds;
-            rt.Brain.MaxIdleSeconds = BrainTuning.MaxIdleSeconds;
-            rt.Brain.ShowInChat     = BrainTuning.ShowInChat;
+            // ── 台词节奏 / 闲聊（全部按槽位）──
+            rt.Brain.AutoChatter    = s.AutoChatter;
+            rt.Brain.MinIdleSeconds = s.MinIdleSeconds;
+            rt.Brain.MaxIdleSeconds = s.MaxIdleSeconds;
+            rt.Brain.ShowInChat     = s.ShowInChat;
+            rt.Brain.LineCooldownSeconds = Math.Max(0f, s.LineCooldownSeconds);
+            rt.Brain.NearChatDistance    = Math.Clamp(s.CloseTouchDistance, 0.3f, 8f);
             rt.Brain.Name = NpcNaming.EffectiveName(s.Name, "她");
             rt.Brain.PlayerTitle = string.IsNullOrWhiteSpace(s.PlayerTitle)
                 ? NpcLines.DefaultTitle
                 : s.PlayerTitle.Trim();
-            rt.Brain.LineCooldownSeconds = Math.Max(0f, _config.LineCooldownSeconds);
-            rt.Brain.NearChatDistance    = Math.Clamp(_config.CloseTouchDistance, 0.3f, 8f);
+
+            // ── 呈现层按槽位覆盖（null/不设 = 沿用全局，主 NPC 行为不变）──
+            rt.Brain.VoiceEnabledOverride   = s.VoiceInherit ? null : s.VoiceEnabled;
+            rt.Brain.VoiceLineIdOverride    = s.VoiceInherit ? null : Math.Clamp(s.VoiceLineId, 0, 9999);
+            rt.Brain.BalloonEnabledOverride = s.BalloonInherit ? null : s.BalloonEnabled;
+            rt.Brain.BalloonSecondsOverride = s.BalloonInherit ? null : Math.Clamp(s.BalloonSeconds, 0.5f, 30f);
+            rt.Brain.GestureChanceOverride  = Math.Clamp(s.GestureChancePercent, 0f, 100f);
         }
 
         if (rt.Animator is not null)
@@ -377,9 +452,9 @@ public sealed unsafe class SubNpcManager
             rt.Animator.LipFlapSeconds = Math.Clamp(_config.LipFlapSeconds, 0.05f, 0.6f);
             rt.Animator.WalkSpeedScale    = _config.WalkSpeedScale;
             rt.Animator.TurnPlaybackSpeed = _config.TurnPlaybackSpeed;
-            rt.Animator.IdleRelaxSeconds  = Math.Clamp(_config.IdleRelaxSeconds, 0f, 600f);
-            rt.Animator.IdleSwitchSeconds = Math.Clamp(_config.IdleSwitchSeconds, 5f, 600f);
-            rt.Animator.IdleAutoRandom    = false;   // 副 NPC 不自动随机换姿势（v1 简化，姿势跟槽位设置走）
+            rt.Animator.IdleRelaxSeconds  = Math.Clamp(s.IdleRelaxSeconds, 0f, 600f);
+            rt.Animator.IdleSwitchSeconds = Math.Clamp(s.IdleSwitchSeconds, 5f, 600f);
+            rt.Animator.IdleAutoRandom    = s.IdleAutoRandom;
         }
 
         if (rt.Brain is not null && Enum.IsDefined(typeof(NpcBrain.Persona), s.Persona))
@@ -510,15 +585,31 @@ public sealed unsafe class SubNpcManager
 
         var territory = _clientState?.TerritoryType ?? 0;
 
+        // ⚠️ 这版 Dalamud 的 IPlayerCharacter 不能显式写类型名（主控制器全程用 var 推断绕开），
+        // 所以这里把各触发器需要的玩家数据**取样成标量**传下去，不传玩家对象。
+        var playerRot = player.Rotation;
+        var playerAddress = player.Address;
+
+        // 职业表（值类型 RowRef，读失败就 null，槽位侧 0.4s 节流自己看着办）。
+        Lumina.Excel.RowRef<Lumina.Excel.Sheets.ClassJob>? jobRow = null;
+        try { jobRow = player.ClassJob; } catch { }
+
+        // 玩家血量（掉血关心用；读失败保持上次值即可）。
+        uint maxHp = 0, currentHp = 0;
+        try { maxHp = player.MaxHp; currentHp = player.CurrentHp; } catch { }
+
         for (var i = 0; i < _slots.Length; ++i)
         {
             if (i >= _config.SubNpcs.Count)
                 break;   // Sanitize 还没跑过（理论上不该发生），别越界
-            TickSlot(i, delta, player, playerPos, territory);
+            TickSlot(i, delta, playerAddress, playerPos, playerRot, territory, jobRow, maxHp, currentHp);
         }
     }
 
-    private void TickSlot(int slot, float delta, IGameObject player, Vector3 playerPos, uint territory)
+    private void TickSlot(int slot, float delta, nint playerAddress, Vector3 playerPos,
+                          float playerRotation, uint territory,
+                          Lumina.Excel.RowRef<Lumina.Excel.Sheets.ClassJob>? jobRow,
+                          uint maxHp, uint currentHp)
     {
         var rt = _slots[slot];
         var setting = _config!.SubNpcs[slot];
@@ -584,7 +675,7 @@ public sealed unsafe class SubNpcManager
             rt.SpawnDraw = null;
             NpcTargetable.Apply(
                 (GameObject*)handle.Address,
-                (GameObject*)player.Address,
+                (GameObject*)playerAddress,
                 _config.TargetableByPlayer,
                 forceTrace: false,
                 ourIndex: handle.ObjectIndex);
@@ -595,10 +686,13 @@ public sealed unsafe class SubNpcManager
 
         // 可选中 + 嗓音保持 + 气泡生命周期（各自喂各自的地址，互不干扰）。
         var npcGo   = (GameObject*)handle.Address;
-        var playerGo = (GameObject*)player.Address;
+        var playerGo = (GameObject*)playerAddress;
         NpcTargetable.Apply(npcGo, playerGo, _config.TargetableByPlayer, ourIndex: handle.ObjectIndex);
-        if (VoiceTuning.PresetId > 0)
-            NpcVoice.ApplyPreset((Character*)handle.Address, VoiceTuning.PresetId);
+
+        // 嗓音按槽位：跟随主 NPC 设置，或用槽位自己的嗓音编号（每帧保持，换装会冲掉）。
+        var presetId = setting.VoiceInherit ? VoiceTuning.PresetId : Math.Clamp(setting.VoicePresetId, 0, 255);
+        if (presetId > 0)
+            NpcVoice.ApplyPreset((Character*)handle.Address, presetId);
         NpcBalloon.Tick((Character*)handle.Address);
 
         if (rt.Motion is null || rt.Animator is null || rt.Brain is null || rt.Behaviour is null)
@@ -620,7 +714,7 @@ public sealed unsafe class SubNpcManager
 
         rt.Behaviour.Update(playerDist, delta);
 
-        var goal = rt.Behaviour.Goal(here, playerPos, player.Rotation, playerDist);
+        var goal = rt.Behaviour.Goal(here, playerPos, playerRotation, playerDist);
         if (_playerSpeed >= MotionTuning.RunGaitThreshold)
             goal = goal with { Gait = Gait.奔跑 };
 
@@ -651,7 +745,7 @@ public sealed unsafe class SubNpcManager
 
         rt.Motion.SpeedScale = 1f;
         rt.Motion.PlayerPosition = playerPos;
-        rt.Motion.PlayerRotation = player.Rotation;
+        rt.Motion.PlayerRotation = playerRotation;
 
         rt.Motion.Update(handle, goal, facing);
 
@@ -685,11 +779,300 @@ public sealed unsafe class SubNpcManager
                   : NpcBrain.Scene.平静;
         rt.Brain.CurrentScene = scene;
 
-        if (_config.SceneReactions)
+        // 槽位开 = 这个副 NPC 自己对情境反应（走她自己的大脑，与主 NPC 互不影响）。
+        if (setting.SceneReactions)
             rt.Brain.UpdateSceneReaction(scene, delta);
+
+        // ── 台词触发器（v0.18.69.23）：与主 NPC 同一套判定，状态按槽位独立 ──
+        TickSubLineTriggers(slot, delta, playerAddress, playerPos, here, playerDist, playerRotation, jobRow, maxHp, currentHp);
 
         rt.Animator.UpdateLipSync(rt.Brain.IsSpeaking, delta);
         rt.Brain.Update(handle, playerPos, delta);
+    }
+
+    // ── v0.18.69.23：按槽位的台词触发器（天气/时段/职业/战斗互动/表情回应）──
+    //
+    // 判定逻辑与主控制器同名触发器一致；区别：
+    //   · 状态记在槽位运行时里（各自的"上次天气 / 上次职业 / 注视累计"…）；
+    //   · 各类开关读槽位设置（主 NPC 读主配置）；
+    //   · 表情回应要求玩家当前目标**是这个副 NPC**（同一条硬目标判据）。
+
+    private void TickSubLineTriggers(int slot, float delta, nint playerAddress,
+                                      Vector3 playerPos, Vector3 here, float playerDist,
+                                      float playerRotation,
+                                      Lumina.Excel.RowRef<Lumina.Excel.Sheets.ClassJob>? jobRow,
+                                      uint maxHp, uint currentHp)
+    {
+        var rt      = _slots[slot];
+        var setting = _config!.SubNpcs[slot];
+        var brain   = rt.Brain;
+        var anim    = rt.Animator;
+        if (brain is null || rt.Npc is not { IsAlive: true })
+            return;
+
+        // ── 天气 / 时段（NpcEnvironment 由主循环每帧取样，这里只判"变了没有"）──
+        var weather = NpcEnvironment.Weather;
+        var phase   = NpcEnvironment.Phase;
+
+        if (!rt.EnvPrimed)
+        {
+            rt.EnvPrimed   = true;
+            rt.SeenWeather = weather;
+            rt.SeenPhase   = phase;
+        }
+        else
+        {
+            if (weather != rt.SeenWeather)
+            {
+                rt.SeenWeather = weather;
+
+                var special   = weather is NpcLines.Weather.其他 or NpcLines.Weather.未知;
+                var allowKind = !special || setting.SpecialWeatherLines;
+
+                if (allowKind && setting.WeatherLines)
+                {
+                    var noun = NpcEnvironment.WeatherNoun;
+                    var said = setting.WeatherNameLines
+                            && !string.IsNullOrWhiteSpace(noun)
+                            && brain.OnWeatherName(noun);
+
+                    if (!said && !special)
+                        brain.OnWeather(weather);
+                }
+            }
+
+            if (phase != rt.SeenPhase)
+            {
+                rt.SeenPhase = phase;
+                if (setting.DayPhaseLines)
+                    brain.OnDayPhase(phase);
+            }
+        }
+
+        // ── 职业（0.4 秒看一次，切换后只说一次）──
+        rt.JobCheckTimer -= delta;
+        if (rt.JobCheckTimer <= 0f)
+        {
+            rt.JobCheckTimer = 0.4f;
+
+            try
+            {
+                if (jobRow is { } row)
+                {
+                    var jobId = row.RowId;
+
+                    if (jobId != 0)
+                    {
+                        if (!rt.JobPrimed)
+                        {
+                            rt.JobPrimed = true;
+                            rt.LastJobId = jobId;
+                        }
+                        else if (jobId != rt.LastJobId)
+                        {
+                            var changed = rt.LastJobId != 0;
+                            rt.LastJobId = jobId;
+
+                            if (changed && setting.JobLines)
+                            {
+                                var jobName = JobNameOf(row);
+                                var job     = NpcJobLines.ResolveJob(jobId, jobName);
+
+                                var jobPool = NpcJobLines.Lines(brain.CurrentPersona, job)
+                                        ?? NpcJobLines.RoleLines(brain.CurrentPersona, NpcJobLines.RoleOf(job))
+                                        ?? NpcJobLines.GenericLines(brain.CurrentPersona);
+
+                                brain.OnJob(job, jobPool);
+                            }
+                        }
+                    }
+                }
+            }
+            catch { /* 职业表读不到就算了，0.4 秒后再试 */ }
+        }
+
+        // ── 战斗阶段 + 玩家互动（血量已由外层每帧取样传入）──
+        maxHp = Math.Max(1u, maxHp);
+        var hpPercent = Math.Clamp((float)currentHp / maxHp, 0f, 1f);
+
+        if (!rt.HasHp)
+        {
+            rt.HasHp         = true;
+            rt.LastHpPercent = hpPercent;
+        }
+
+        var drop = rt.LastHpPercent - hpPercent;
+
+        var inCombat    = rt.Behaviour?.PlayerInCombat ?? false;
+        var combatLines = setting.CombatLines;
+
+        if (inCombat && !rt.WasInCombat)
+        {
+            if (combatLines)
+                brain.OnCombat(NpcLines.Combat.进入);
+            rt.CombatChatTimer = 9f;
+        }
+        else if (!inCombat && rt.WasInCombat)
+        {
+            if (combatLines)
+                brain.OnCombat(hpPercent < 0.5f ? NpcLines.Combat.撤退 : NpcLines.Combat.胜利);
+        }
+        else if (inCombat)
+        {
+            rt.CombatChatTimer -= delta;
+            if (rt.CombatChatTimer <= 0f)
+            {
+                rt.CombatChatTimer = 14f;
+                if (combatLines)
+                    brain.OnCombat(Random.Shared.Next(2) == 0
+                        ? NpcLines.Combat.攻击
+                        : NpcLines.Combat.称赞);
+            }
+        }
+
+        rt.WasInCombat = inCombat;
+
+        // 掉血 → 关心（一次掉 12% 以上才算"挨了一下"）。
+        if (drop >= 0.12f && setting.TouchLines)
+            brain.OnTouch(NpcLines.Touch.受伤关心, 25f);
+
+        rt.LastHpPercent = hpPercent;
+
+        // 玩家把她选成目标（Dalamud 托管目标管理器，与主 NPC 同源）。
+        var targeted = Plugin.TargetManager is { } tm
+                    && tm.Target is { } t
+                    && t.Address == rt.Npc.Address;
+
+        if (targeted && !rt.WasTargeted && setting.TouchLines)
+            brain.OnTouch(NpcLines.Touch.被选中, 15f);
+
+        rt.WasTargeted = targeted;
+
+        // 被注视 / 被靠近（转身路过的不算）。
+        var toNpcYaw = MathF.Atan2(here.X - playerPos.X, here.Z - playerPos.Z);
+        var facing   = MathF.Abs(NormalizeAngle(toNpcYaw - playerRotation)) < 0.6f;
+        var still    = _playerRawSpeed < 0.25f;
+        var inRange  = playerDist is > 0.6f and < 8f;
+
+        if (facing && still && inRange)
+            rt.GazeHold += delta;
+        else
+            rt.GazeHold = 0f;
+
+        var closeDist = Math.Clamp(setting.CloseTouchDistance, 0.05f, 8f);
+
+        if (still && playerDist < closeDist)
+            rt.CloseHold += delta;
+        else
+            rt.CloseHold = 0f;
+
+        if (rt.CloseHold > 3f)
+        {
+            rt.CloseHold = 0f;
+            rt.GazeHold  = 0f;
+            if (setting.TouchLines)
+                brain.OnTouch(NpcLines.Touch.被靠近, 60f);
+        }
+        else if (rt.GazeHold > 4f)
+        {
+            rt.GazeHold = 0f;
+            if (setting.TouchLines)
+                brain.OnTouch(NpcLines.Touch.被注视, 45f);
+        }
+
+        // ── 表情回应（必须玩家当前目标是她；0.15 秒探一次）──
+        rt.EmoteReactCooldown -= delta;
+        rt.EmoteProbeTimer    -= delta;
+        if (rt.EmoteProbeTimer > 0f || !setting.EmoteReactions)
+            return;
+
+        rt.EmoteProbeTimer = 0.15f;
+
+        ushort emoteId;
+        try { emoteId = ((Character*)playerAddress)->EmoteController.EmoteId; }
+        catch { return; }
+
+        if (emoteId == 0 || emoteId == rt.LastPlayerEmoteId)
+        {
+            rt.LastPlayerEmoteId = emoteId;
+            return;
+        }
+
+        rt.LastPlayerEmoteId = emoteId;
+
+        if (!IsPlayerTargeting(rt.Npc.Address) || rt.EmoteReactCooldown > 0f)
+            return;
+
+        var name = NpcAnimator.EmoteNames.TryGetValue(emoteId, out var n) ? n : string.Empty;
+
+        if (NpcEmoteReactions.IsIgnored(name))
+            return;
+
+        var kind = NpcEmoteReactions.KindFor(name);
+
+        var pool = NpcEmoteReactions.Lines(brain.CurrentPersona, kind)
+                ?? NpcEmoteReactions.Lines(brain.CurrentPersona, NpcLines.React.通用);
+
+        if (pool is null)
+            return;
+
+        rt.EmoteReactCooldown = 3f;
+        brain.OnEmote(name, pool);
+
+        // 回应走语义映射表（与主 NPC 同一套，绝不做盲镜像）。
+        var respName = NpcEmoteReactions.ResponseEmoteNameFor(name);
+        var respRow  = anim?.FindEmoteRow(respName) ?? 0;
+
+        var respOk = respRow != 0
+                     && anim is not null
+                     && anim.PlayResponseEmote(respRow, anim.EmoteLoopTimelineOf(respRow));
+
+        if (!respOk)
+        {
+            var resolved = anim?.ResolveActionName(NpcEmoteReactions.GestureFor(kind));
+            if (resolved is not null && anim is not null)
+                anim.Play(resolved, NpcGesture.DurationFor(resolved));
+        }
+    }
+
+    /// <summary>玩家的硬目标是不是这个地址（与主 NPC 同判据，TargetSystem 直比地址）。</summary>
+    private static bool IsPlayerTargeting(nint address)
+    {
+        try
+        {
+            var ts = FFXIVClientStructs.FFXIV.Client.Game.Control.TargetSystem.Instance();
+            if (ts is null)
+                return false;
+
+            var hard = ts->Target;
+            return hard is not null && (nint)hard == address;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>把角度差折到 -π ~ +π。</summary>
+    private static float NormalizeAngle(float a)
+    {
+        while (a > MathF.PI)  a -= 2f * MathF.PI;
+        while (a < -MathF.PI) a += 2f * MathF.PI;
+        return a;
+    }
+
+    /// <summary>行号 → 职业名（三层兜底前的原始名，与主 NPC 同源）。</summary>
+    private static string JobNameOf(Lumina.Excel.RowRef<Lumina.Excel.Sheets.ClassJob> row)
+    {
+        try
+        {
+            var s = row.Value.Name.ToString();
+            return s ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>插件卸载：全部送走。</summary>
@@ -719,6 +1102,24 @@ public sealed unsafe class SubNpcManager
         public Guid SeenDesignId = Guid.Empty;
         public string? SeenName;
 
+        // 台词触发器状态（v0.18.69.23，与主 NPC 同名状态各自的份）。
+        public bool EnvPrimed;          // 天气/时段首次取样
+        public NpcLines.Weather SeenWeather;
+        public NpcLines.DayPhase SeenPhase;
+        public bool JobPrimed;          // 职业首次取样
+        public uint LastJobId;
+        public float JobCheckTimer;     // 0.4s 节流
+        public bool WasInCombat;
+        public float CombatChatTimer;
+        public bool HasHp;
+        public float LastHpPercent = 1f;
+        public bool WasTargeted;
+        public float GazeHold;
+        public float CloseHold;
+        public ushort LastPlayerEmoteId;
+        public float EmoteProbeTimer;   // 0.15s 节流
+        public float EmoteReactCooldown;
+
         /// <summary>清空运行时（槽位配置保留）。</summary>
         public void Clear()
         {
@@ -734,6 +1135,17 @@ public sealed unsafe class SubNpcManager
             WasActionBusy  = false;
             InvalidFrames  = 0;
             LastTerritory  = 0;
+
+            // 台词触发器状态一并重置 —— 重召唤后从"首次取样"重新开始。
+            EnvPrimed  = false;
+            JobPrimed  = false;
+            WasInCombat = false;
+            HasHp       = false;
+            WasTargeted = false;
+            GazeHold    = 0f;
+            CloseHold   = 0f;
+            LastPlayerEmoteId = 0;
+            EmoteReactCooldown = 0f;
         }
     }
 }

@@ -75,6 +75,29 @@ public sealed unsafe class NpcBrain(IPluginLog log, IChatGui? chat, NpcAnimator 
 
     private float _lineCooldown;
 
+    // ── v0.18.69.22：按 NPC 的呈现覆盖（副 NPC 用）──
+    //
+    // 气泡 / 配音 / 动作概率原本读的是**全局静态**（BalloonTuning / VoiceTuning /
+    // NpcGesture.ChancePercent）—— 主 NPC 面板推全局，副 NPC 各槽要有自己的值。
+    // 这些覆盖属性为 null = 沿用全局（主 NPC 从不设置它们，行为不变）。
+
+    /// <summary>头顶气泡开关覆盖（null = 沿用 BalloonTuning.Enabled）。</summary>
+    public bool?  BalloonEnabledOverride { get; set; }
+
+    /// <summary>头顶气泡时长覆盖（null = 沿用 BalloonTuning.Seconds）。</summary>
+    public float? BalloonSecondsOverride { get; set; }
+
+    /// <summary>说话配音开关覆盖（null = 沿用 VoiceTuning.Enabled）。</summary>
+    public bool?  VoiceEnabledOverride   { get; set; }
+
+    /// <summary>语音行号覆盖（null = 沿用 VoiceTuning.LineId；嗓音音色走每帧
+    /// NpcVoice.ApplyPreset，由控制器按槽位喂）。</summary>
+    public int?   VoiceLineIdOverride    { get; set; }
+
+    /// <summary>台词配动作的概率覆盖（**%**，null = 沿用 NpcGesture.ChancePercent；
+    /// 最小间隔仍是全局节奏 —— 多个 NPC 共用一道闸防动作刷屏）。</summary>
+    public float? GestureChanceOverride  { get; set; }
+
     /// <summary>
     /// 每种人格在三种距离下的台词，外加"话多密"系数。
     ///
@@ -214,14 +237,14 @@ public sealed unsafe class NpcBrain(IPluginLog log, IChatGui? chat, NpcAnimator 
         // v0.18.49 头顶气泡：走她自己 Character 上的 YellBalloon（游戏原生 NPC 喊话气泡），
         // 和肢体动作/配音同一拍出，观感上"她正在说这句"。
         // ⚠️ 放在聊天栏之后、配音之前：文字先出来，声音与开口动作跟上。
-        if (BalloonTuning.Enabled && _npc is { } bubbleNpc && bubbleNpc.Address != nint.Zero)
-            NpcBalloon.Show((Character*)bubbleNpc.Address, line, BalloonTuning.Seconds);
+        if ((BalloonEnabledOverride ?? BalloonTuning.Enabled) && _npc is { } bubbleNpc && bubbleNpc.Address != nint.Zero)
+            NpcBalloon.Show((Character*)bubbleNpc.Address, line, BalloonSecondsOverride ?? BalloonTuning.Seconds);
 
         // 说话配音（v0.18.37：真正的角色语音 —— 走游戏自己的
         // VfxContainer.LoadCharacterSound，音色由 Character.Vfx.VoiceId 决定）。
         // ⚠️ 放在肢体动作之前 —— 声音先出、"开口"的动作同步跟上，观感一致。
-        if (VoiceTuning.Enabled && _npc is { } voiceNpc && voiceNpc.Address != nint.Zero)
-            NpcVoice.TryPlay((Character*)voiceNpc.Address, VoiceTuning.LineId, VoiceTuning.MinInterval);
+        if ((VoiceEnabledOverride ?? VoiceTuning.Enabled) && _npc is { } voiceNpc && voiceNpc.Address != nint.Zero)
+            NpcVoice.TryPlay((Character*)voiceNpc.Address, VoiceLineIdOverride ?? VoiceTuning.LineId, VoiceTuning.MinInterval);
 
         // 说话时配一个肢体语言，让台词不悬着。
         //
@@ -237,7 +260,7 @@ public sealed unsafe class NpcBrain(IPluginLog log, IChatGui? chat, NpcAnimator 
         // ⚠️ v0.17.4 沿用：「移动中不做动作」开着且她正在走 → 只说话不比划（推迟到停下）。
         if (!SuppressGestureAndChatter)
         {
-            var gesture = NpcGesture.Decide(CurrentPersona, line);
+            var gesture = NpcGesture.Decide(CurrentPersona, line, GestureChanceOverride);
             if (gesture is not null)
                 // ⚠️ v0.18.53：时长**按时长分档**，不再一律 2.2 秒 ——
                 // 表情走的是 BaseOverride（基底动画，会循环），摇头那条约 1 秒摇一次，
