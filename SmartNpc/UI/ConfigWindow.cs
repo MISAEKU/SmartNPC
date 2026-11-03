@@ -44,11 +44,21 @@ public sealed unsafe class ConfigWindow : Window
     /// <summary>「立刻选中她」最近一次的返回（v0.18.39）。</summary>
     private string _selectResult = string.Empty;
 
+    /// <summary>
+    /// v0.18.69.23 二轮：三个副 NPC 的设置子页（主设置窗口横栏 TabBar 的后三个 Tab）。
+    /// 用户裁定：不再用独立浮动窗口 —— 一个设置窗口、四个子页（主 NPC + 三副）。
+    /// </summary>
+    private readonly SubNpcPanel[] _subPanels;
+
     public ConfigWindow(Configuration config, NpcController controller)
         : base("智能 NPC###SmartNpcConfig")
     {
         _config     = config;
         _controller = controller;
+
+        _subPanels = new SubNpcPanel[Configuration.SubNpcSlotCount];
+        for (var i = 0; i < Configuration.SubNpcSlotCount; ++i)
+            _subPanels[i] = new SubNpcPanel(i, config, controller);
 
         Size = new Vector2(430f, 640f);
         SizeConstraints = new WindowSizeConstraints
@@ -60,15 +70,40 @@ public sealed unsafe class ConfigWindow : Window
 
     public override void Draw()
     {
-        DrawHeader();
+        // ── 顶部横栏（v0.18.69.23 二轮，用户裁定）：一个设置窗口、四个子页 ──
+        // 主 NPC + 副 NPC 1/2/3，每个 NPC 的全部设置都在自己的子页里，点横栏切换。
+        if (!ImGui.BeginTabBar("SmartNpcNpcTabs"))
+            return;
 
-        if (Header("外观与召唤", open: true))  { ImGui.Indent(); DrawAppearanceBlock();  ImGui.Unindent(); }
-        if (Header("性格与动作", open: true))  { ImGui.Indent(); DrawPersonaBlock();    ImGui.Unindent(); }
-        if (Header("跟随与瞬移", open: true))  { ImGui.Indent(); DrawFollowBlock();     ImGui.Unindent(); }
-        if (Header("绕障",       open: true))  { ImGui.Indent(); DrawAvoidanceBlock();  ImGui.Unindent(); }
-        if (Header("站定节奏与视线", open: true)) { ImGui.Indent(); DrawIdleBlock();    ImGui.Unindent(); }
-        if (Header("副 NPC 随从（最多 3 个）", open: true)) { ImGui.Indent(); DrawSubNpcBlock(); ImGui.Unindent(); }
-        if (Header("高级与调试", open: false)) { ImGui.Indent(); DrawAdvancedBlock();   ImGui.Unindent(); }
+        if (ImGui.BeginTabItem("主 NPC"))
+        {
+            DrawHeader();
+
+            if (Header("外观与召唤", open: true))     { ImGui.Indent(); DrawAppearanceBlock(); ImGui.Unindent(); }
+            if (Header("性格与动作", open: true))     { ImGui.Indent(); DrawPersonaBlock();    ImGui.Unindent(); }
+            if (Header("跟随与瞬移", open: true))     { ImGui.Indent(); DrawFollowBlock();     ImGui.Unindent(); }
+            if (Header("绕障",       open: true))     { ImGui.Indent(); DrawAvoidanceBlock();  ImGui.Unindent(); }
+            if (Header("站定节奏与视线", open: true)) { ImGui.Indent(); DrawIdleBlock();       ImGui.Unindent(); }
+            if (Header("高级与调试", open: false))    { ImGui.Indent(); DrawAdvancedBlock();   ImGui.Unindent(); }
+
+            ImGui.EndTabItem();
+        }
+
+        for (var i = 0; i < Configuration.SubNpcSlotCount && i < _config.SubNpcs.Count; ++i)
+        {
+            var s    = _config.SubNpcs[i];
+            var alive = _controller.SubNpcs?.IsAlive(i) ?? false;
+            var name  = Core.NpcNaming.EffectiveName(s.Name, $"副 {i + 1}");
+            var label = $"副 {i + 1}·{name}{(alive ? " ●" : "")}##subtab{i}";
+
+            if (ImGui.BeginTabItem(label))
+            {
+                _subPanels[i].Draw();
+                ImGui.EndTabItem();
+            }
+        }
+
+        ImGui.EndTabBar();
 
         DrawFooter();
 
@@ -136,92 +171,7 @@ public sealed unsafe class ConfigWindow : Window
         }
     }
 
-    // ── 副 NPC 随从（v0.18.69.22；69.23 改横栏 + 独立窗口）────────
-    //
-    // 用户要求：别把所有设置都堆在一个页面里 —— 主面板只留紧凑横栏
-    //（启用 + 状态 + 召唤/送走 + 复制主设置 + 打开设置窗口），
-    // 全部详细设置按槽位进 SubNpcWindow（每个副 NPC 一个窗口）。
-
-    /// <summary>副 NPC 随从横栏：每槽一行，详细设置在各自独立窗口里。</summary>
-    private void DrawSubNpcBlock()
-    {
-        if (_config.SubNpcs.Count < Configuration.SubNpcSlotCount)
-            _config.Sanitize();   // 补齐 3 槽（正常情况下 Sanitize 已在 ApplyLiveSettings 跑过）
-
-        ImGui.TextDisabled("副 NPC 与主 NPC 各自独立：独立设置、独立跟随，一起跟着你走。换区后会自动回来。\n详细设置点「设置」打开她自己的窗口。");
-        ImGui.Spacing();
-
-        var quarterWidth = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X * 3f) * 0.25f;
-
-        for (var i = 0; i < Configuration.SubNpcSlotCount && i < _config.SubNpcs.Count; ++i)
-        {
-            var s     = _config.SubNpcs[i];
-            var alive = _controller.SubNpcs?.IsAlive(i) ?? false;
-            var name  = Core.NpcNaming.EffectiveName(s.Name, $"未命名 {i + 1}");
-
-            // ── 启用（召唤前提）──
-            var enabled = s.Enabled;
-            if (ImGui.Checkbox($"##subwen{i}", ref enabled))
-                s.Enabled = enabled;
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("启用这个槽位（不启用无法召唤）。");
-
-            ImGui.SameLine();
-
-            // ── 状态行（名字 + 在场状态）──
-            var status = _controller.SubNpcs?.StatusText(i) ?? "？";
-            ImGui.TextUnformatted($"{i + 1}. {name}");
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip($"{status}\n（改动名字去她的设置窗口）");
-
-            ImGui.SameLine();
-
-            if (alive)
-                ImGui.TextColored(new Vector4(0.45f, 0.85f, 0.5f, 1f), "●");
-
-            ImGui.SameLine();
-
-            // ── 召唤 / 送走 ──
-            var summonLabel = alive ? $"送走##subsum{i}" : $"召唤##subsum{i}";
-            ImGui.BeginDisabled(!s.Enabled && !alive);
-            if (ImGui.Button(summonLabel, new Vector2(quarterWidth, 0f)))
-            {
-                if (alive) _controller.SubNpcs!.Dismiss(i);
-                else       _controller.SubNpcs!.Summon(i);
-            }
-            ImGui.EndDisabled();
-
-            ImGui.SameLine();
-
-            // ── 复制并使用主 NPC 设置 ──
-            if (ImGui.Button($"复制主设置##subcopy{i}", new Vector2(quarterWidth, 0f)))
-                _controller.SubNpcs?.CopyFromMain(i);
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("把主 NPC 的全部设置抄进这个槽位（站位偏移保留自己的）。\n语音 / 气泡置为「跟随主 NPC 设置」。她在场就立刻生效。");
-
-            ImGui.SameLine();
-
-            // ── 打开她的独立设置窗口 ──
-            if (ImGui.Button($"设置##subcfg{i}", new Vector2(quarterWidth, 0f)))
-                _controller.OpenSubNpcRequested?.Invoke(i);
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("打开这个副 NPC 的设置窗口：\n名字 / 性格 / 称谓 / 外观 / 站位 / 台词开关与节奏 / 待机姿势 / 语音 / 气泡。");
-        }
-
-        ImGui.Spacing();
-
-        // 全体快捷操作。
-        var halfWidth = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
-        if (ImGui.Button("全部召唤", new Vector2(halfWidth, 0f)))
-            for (var i = 0; i < Configuration.SubNpcSlotCount; ++i)
-                if (_config.SubNpcs[i].Enabled && !_controller.SubNpcs!.IsAlive(i))
-                    _controller.SubNpcs!.Summon(i, announce: false);
-        ImGui.SameLine();
-        if (ImGui.Button("全部送走", new Vector2(halfWidth, 0f)))
-            _controller.SubNpcs?.DismissAll();
-    }
-
-    // ── 分组 1：外观与召唤 ────────────────────────────────────────
+    // （v0.18.69.23 二轮：副 NPC 的设置整体挪进主窗口顶部的横栏子页，见 _subPanels / SubNpcPanel。）
 
     private void DrawAppearanceBlock()
     {

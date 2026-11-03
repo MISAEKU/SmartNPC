@@ -254,10 +254,11 @@ public sealed unsafe class SubNpcManager
         var main = _config;
         var s    = main.SubNpcs[slot];
 
-        s.Name              = main.NpcName;
+        // ⚠️ 名字不抄（v0.18.69.23 二轮，用户明确：缇娅是主 NPC 的名字）——
+        // 名字是这个 NPC 的身份，抄过去会出现两个「缇娅」。称谓跟人格口吻走，照抄。
         s.Persona           = main.Persona;
-        s.GlamourerDesignId = main.GlamourerDesignId;
         s.PlayerTitle       = main.PlayerTitle;
+        s.GlamourerDesignId = main.GlamourerDesignId;
         s.IdleEmoteRowId    = main.IdleEmoteRowId;
         s.IdleEmoteName     = main.IdleEmoteName;
         // FollowSide / FollowBehind 保留槽位自己的值 —— 三个副 NPC 都抄过去会叠在同一格。
@@ -283,9 +284,31 @@ public sealed unsafe class SubNpcManager
         s.IdleSwitchSeconds    = main.IdleSwitchSeconds;
         s.GestureChancePercent = main.GestureChancePercent;
 
-        // 语音 / 气泡先置为「跟随主 NPC 设置」—— 用户想单独调再在窗口里取消继承。
+        // 语音 / 气泡先置为「跟随主 NPC 设置」—— 用户想单独调再在子页里取消继承。
         s.VoiceInherit   = true;
         s.BalloonInherit = true;
+
+        // 全部可空覆盖置回 null = 跟随主 NPC 的同名设置（要独立调再取消跟随）。
+        s.SpeedScale               = null;
+        s.FollowStrength           = null;
+        s.ArriveDistance           = null;
+        s.FollowAgainDistance      = null;
+        s.WalkDistance             = null;
+        s.TeleportDistance         = null;
+        s.TeleportHeight           = null;
+        s.StuckTeleportSeconds     = null;
+        s.AvoidanceEnabled         = null;
+        s.DetourDuration           = null;
+        s.DetourCooldown           = null;
+        s.RoamRange                = null;
+        s.RoamMin                  = null;
+        s.BlockGesturesWhileMoving = null;
+        s.IdleGestureMin           = null;
+        s.IdleGestureMax           = null;
+        s.LipSyncEnabled           = null;
+        s.LipFlapSeconds           = null;
+        s.WalkSpeedScale           = null;
+        s.TurnPlaybackSpeed        = null;
 
         SaveConfig();
         ApplySlotSettings(slot, forcePushIdle: true);
@@ -312,7 +335,7 @@ public sealed unsafe class SubNpcManager
             if (rt.Npc is not { IsAlive: true })
                 continue;
 
-            // 在场的槽位：这些字段变了就立刻推（召 Summon 走 forcePushIdle 全量推）。
+            // 在场的槽位：有副作用的推送走变更侦测（召唤走 forcePushIdle 全量推）。
             if (rt.SeenPersona != s.Persona)
             {
                 rt.SeenPersona = s.Persona;
@@ -334,26 +357,17 @@ public sealed unsafe class SubNpcManager
             if (rt.SeenName != s.Name)
                 PushName(i);
 
-            if (rt.Behaviour is not null)
-            {
-                rt.Behaviour.FollowSide   = s.FollowSide;
-                rt.Behaviour.FollowBehind = FollowDistanceFor((NpcBrain.Persona)s.Persona, s.FollowBehind);
-            }
-
-            if (rt.Brain is not null)
-            {
-                rt.Brain.PlayerTitle = string.IsNullOrWhiteSpace(s.PlayerTitle)
-                    ? NpcLines.DefaultTitle
-                    : s.PlayerTitle.Trim();
-            }
-
-            // 台词节奏 / 闲聊 / 语音 / 气泡 / 姿势节奏：属性直推（无副作用，每帧推也无害）。
-            PushPresentation(i);
+            // 全部数值/开关直推（含覆盖 ?? 主配置值）—— 每帧推也无害，改了立即生效。
+            PushRuntimeSettings(i);
         }
     }
 
-    /// <summary>把"呈现层"的按槽位设置推下去（台词节奏/闲聊/语音/气泡/姿势节奏）。</summary>
-    private void PushPresentation(int slot)
+    /// <summary>
+    /// 把一个槽位的全部运行参数直推下去（数值/开关类，无副作用，每帧调也无害）。
+    /// 覆盖字段 null = 用主 NPC 的同名配置值；ApplySlotSettings（召唤）与
+    /// ApplySettings（面板变更）都走这里，改完立即生效、不用重新召唤。
+    /// </summary>
+    private void PushRuntimeSettings(int slot)
     {
         if (_config is null || slot >= _config.SubNpcs.Count)
             return;
@@ -361,67 +375,39 @@ public sealed unsafe class SubNpcManager
         var rt = _slots[slot];
         var s  = _config.SubNpcs[slot];
 
-        if (rt.Brain is not null)
-        {
-            rt.Brain.AutoChatter    = s.AutoChatter;
-            rt.Brain.MinIdleSeconds = s.MinIdleSeconds;
-            rt.Brain.MaxIdleSeconds = s.MaxIdleSeconds;
-            rt.Brain.ShowInChat     = s.ShowInChat;
-            rt.Brain.LineCooldownSeconds = Math.Max(0f, s.LineCooldownSeconds);
-            rt.Brain.NearChatDistance    = Math.Clamp(s.CloseTouchDistance, 0.3f, 8f);
-
-            rt.Brain.VoiceEnabledOverride   = s.VoiceInherit ? null : s.VoiceEnabled;
-            rt.Brain.VoiceLineIdOverride    = s.VoiceInherit ? null : Math.Clamp(s.VoiceLineId, 0, 9999);
-            rt.Brain.BalloonEnabledOverride = s.BalloonInherit ? null : s.BalloonEnabled;
-            rt.Brain.BalloonSecondsOverride = s.BalloonInherit ? null : Math.Clamp(s.BalloonSeconds, 0.5f, 30f);
-            rt.Brain.GestureChanceOverride  = Math.Clamp(s.GestureChancePercent, 0f, 100f);
-        }
-
-        if (rt.Animator is not null)
-        {
-            rt.Animator.IdleRelaxSeconds  = Math.Clamp(s.IdleRelaxSeconds, 0f, 600f);
-            rt.Animator.IdleSwitchSeconds = Math.Clamp(s.IdleSwitchSeconds, 5f, 600f);
-            rt.Animator.IdleAutoRandom    = s.IdleAutoRandom;
-        }
-    }
-
-    /// <summary>把一个槽位的全部运行参数推下去（召唤时全量推；ApplySettings 走变更侦测）。</summary>
-    private void ApplySlotSettings(int slot, bool forcePushIdle)
-    {
-        if (_config is null)
-            return;
-
-        var rt = _slots[slot];
-        var s  = _config.SubNpcs[slot];
-
         if (rt.Motion is not null)
         {
-            rt.Motion.SpeedScale        = _config.SpeedScale;
-            rt.Motion.TeleportDistance  = _config.TeleportDistance;
-            rt.Motion.TeleportHeight    = _config.TeleportHeight;
-            rt.Motion.AvoidanceEnabled  = _config.AvoidanceEnabled;
-            rt.Motion.StuckTeleportSeconds = _config.StuckTeleportSeconds;
-            rt.Motion.DetourDuration    = _config.DetourDuration;
-            rt.Motion.DetourCooldown    = _config.DetourCooldown;
-            rt.Motion.FollowStrength    = _config.FollowStrength;
-            rt.Motion.WalkLagDistance   = _config.WalkDistance;
-            rt.Motion.SpawnOffsetBehind = _config.SpawnOffsetBehind;
-            rt.Motion.SpawnOffsetSide   = s.FollowSide;   // 召唤落点用槽位的侧偏
+            rt.Motion.SpeedScale           = s.SpeedScale           ?? _config.SpeedScale;
+            rt.Motion.TeleportDistance     = s.TeleportDistance     ?? _config.TeleportDistance;
+            rt.Motion.TeleportHeight       = s.TeleportHeight       ?? _config.TeleportHeight;
+            rt.Motion.AvoidanceEnabled     = s.AvoidanceEnabled     ?? _config.AvoidanceEnabled;
+            rt.Motion.StuckTeleportSeconds = s.StuckTeleportSeconds ?? _config.StuckTeleportSeconds;
+            rt.Motion.DetourDuration       = s.DetourDuration       ?? _config.DetourDuration;
+            rt.Motion.DetourCooldown       = s.DetourCooldown       ?? _config.DetourCooldown;
+            rt.Motion.FollowStrength       = s.FollowStrength       ?? _config.FollowStrength;
+            rt.Motion.WalkLagDistance      = s.WalkDistance         ?? _config.WalkDistance;
+            rt.Motion.SpawnOffsetBehind    = _config.SpawnOffsetBehind;
+            rt.Motion.SpawnOffsetSide      = s.FollowSide;   // 召唤落点用槽位的侧偏
             if (rt.Animator is not null)
                 rt.Motion.JumpEnabled = rt.Animator.HasJumpAnim;
         }
 
         if (rt.Behaviour is not null)
         {
-            rt.Behaviour.Enabled         = BrainTuning.BehaviourEnabled;
-            rt.Behaviour.RunDistance     = BehaviourTuning.RunDistance;
-            rt.Behaviour.WalkDistance    = BehaviourTuning.WalkDistance;
-            rt.Behaviour.StrayDistance   = BehaviourTuning.StrayDistance;
-            rt.Behaviour.ArriveDistance  = Math.Clamp(_config.ArriveDistance, 0.5f, 8f);
-            rt.Behaviour.RoamRange       = Math.Clamp(_config.RoamRange * 0.6f, 1f, 20f);   // 副 NPC 游荡圈收小一点
-            rt.Behaviour.RoamMin         = Math.Clamp(_config.RoamMin, 0.5f, 8f);
-            rt.Behaviour.FollowBehind    = FollowDistanceFor((NpcBrain.Persona)s.Persona, s.FollowBehind);
-            rt.Behaviour.FollowSide      = s.FollowSide;
+            rt.Behaviour.Enabled        = BrainTuning.BehaviourEnabled;
+            rt.Behaviour.RunDistance    = BehaviourTuning.RunDistance;
+            rt.Behaviour.WalkDistance   = BehaviourTuning.WalkDistance;
+            rt.Behaviour.StrayDistance  = BehaviourTuning.StrayDistance;
+            rt.Behaviour.ArriveDistance = Math.Clamp(s.ArriveDistance ?? _config.ArriveDistance, 0.5f, 8f);
+            rt.Behaviour.RoamRange      = Math.Clamp(s.RoamRange ?? _config.RoamRange, 1f, 20f);
+            rt.Behaviour.RoamMin        = Math.Clamp(s.RoamMin ?? _config.RoamMin, 0.5f, 8f);
+            rt.Behaviour.FollowAgainDistance = Math.Clamp(s.FollowAgainDistance ?? _config.FollowAgainDistance, 1f, 30f);
+            rt.Behaviour.GesturesWhileMoving = !(s.BlockGesturesWhileMoving ?? _config.BlockGesturesWhileMoving);
+            rt.Behaviour.IdleGestureMin = s.IdleGestureMin ?? _config.IdleGestureMin;
+            rt.Behaviour.IdleGestureMax = MathF.Max(s.IdleGestureMax ?? _config.IdleGestureMax,
+                                                     rt.Behaviour.IdleGestureMin + 1f);
+            rt.Behaviour.FollowBehind   = FollowDistanceFor((NpcBrain.Persona)s.Persona, s.FollowBehind);
+            rt.Behaviour.FollowSide     = s.FollowSide;
         }
 
         if (rt.Brain is not null)
@@ -438,7 +424,7 @@ public sealed unsafe class SubNpcManager
                 ? NpcLines.DefaultTitle
                 : s.PlayerTitle.Trim();
 
-            // ── 呈现层按槽位覆盖（null/不设 = 沿用全局，主 NPC 行为不变）──
+            // ── 呈现层按槽位覆盖（null/继承 = 沿用全局）──
             rt.Brain.VoiceEnabledOverride   = s.VoiceInherit ? null : s.VoiceEnabled;
             rt.Brain.VoiceLineIdOverride    = s.VoiceInherit ? null : Math.Clamp(s.VoiceLineId, 0, 9999);
             rt.Brain.BalloonEnabledOverride = s.BalloonInherit ? null : s.BalloonEnabled;
@@ -448,14 +434,26 @@ public sealed unsafe class SubNpcManager
 
         if (rt.Animator is not null)
         {
-            rt.Animator.LipSyncEnabled = _config.LipSyncEnabled;
-            rt.Animator.LipFlapSeconds = Math.Clamp(_config.LipFlapSeconds, 0.05f, 0.6f);
-            rt.Animator.WalkSpeedScale    = _config.WalkSpeedScale;
-            rt.Animator.TurnPlaybackSpeed = _config.TurnPlaybackSpeed;
+            rt.Animator.LipSyncEnabled = s.LipSyncEnabled ?? _config.LipSyncEnabled;
+            rt.Animator.LipFlapSeconds = Math.Clamp(s.LipFlapSeconds ?? _config.LipFlapSeconds, 0.05f, 0.6f);
+            rt.Animator.WalkSpeedScale    = s.WalkSpeedScale    ?? _config.WalkSpeedScale;
+            rt.Animator.TurnPlaybackSpeed = s.TurnPlaybackSpeed ?? _config.TurnPlaybackSpeed;
             rt.Animator.IdleRelaxSeconds  = Math.Clamp(s.IdleRelaxSeconds, 0f, 600f);
             rt.Animator.IdleSwitchSeconds = Math.Clamp(s.IdleSwitchSeconds, 5f, 600f);
             rt.Animator.IdleAutoRandom    = s.IdleAutoRandom;
         }
+    }
+
+    /// <summary>召唤时的全量推送：直推 + 人格/姿势/外观/名字的有副作用部分。</summary>
+    private void ApplySlotSettings(int slot, bool forcePushIdle)
+    {
+        if (_config is null)
+            return;
+
+        var rt = _slots[slot];
+        var s  = _config.SubNpcs[slot];
+
+        PushRuntimeSettings(slot);
 
         if (rt.Brain is not null && Enum.IsDefined(typeof(NpcBrain.Persona), s.Persona))
         {
@@ -756,8 +754,8 @@ public sealed unsafe class SubNpcManager
         rt.Animator.SetWalking(rt.Motion.IsMoving, rt.Motion.CurrentSpeed, rt.Motion.CurrentGait);
         rt.Animator.ApplyAuthority(rt.Motion.IsMoving, rt.Motion.CurrentSpeed, rt.Motion.CurrentGait);
 
-        // 待机小动作（与主 NPC 同一门控：玩家走时不插）。
-        var blockWhileMoving = _config.BlockGesturesWhileMoving;
+        // 待机小动作（与主 NPC 同一门控：玩家走时不插；闸门按槽位覆盖）。
+        var blockWhileMoving = setting.BlockGesturesWhileMoving ?? _config.BlockGesturesWhileMoving;
         var playerMoving = _playerRawSpeed > 0.25f;
         var gestureGate = blockWhileMoving
             ? (!rt.Motion.IsMoving && !playerMoving)

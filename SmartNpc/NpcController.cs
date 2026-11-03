@@ -259,12 +259,6 @@ public sealed unsafe class NpcController : IDisposable
     /// <summary>副 NPC 管理器要落存档时借道这里（SaveConfig 是私有的，包一层）。</summary>
     internal void SaveNow() => SaveConfig();
 
-    /// <summary>
-    /// v0.18.69.23：打开某个副 NPC 的独立设置窗口（槽位号）。
-    /// 窗口归 Plugin 所有（WindowSystem 在那里），主面板的「设置」按钮借道这里。
-    /// </summary>
-    public Action<int>? OpenSubNpcRequested { get; set; }
-
     /// <summary>副 NPC 管理器在服务未注入时用的空日志（NullLog 是私有的，包一层）。</summary>
     internal static IPluginLog NullLogForSub() => NullLog.Instance;
 

@@ -670,6 +670,25 @@ public sealed class Configuration : IPluginConfiguration
             s.VoiceLineId          = (int)Clamp(s.VoiceLineId, 0, 9999);
             s.BalloonSeconds       = Clamp(s.BalloonSeconds, 0.5f, 30f);
             s.GestureChancePercent = Clamp(s.GestureChancePercent, 0f, 100f);
+
+            // v0.18.69.23 二轮：可空覆盖钳制（null = 跟随主 NPC，不钳）。
+            s.SpeedScale            = s.SpeedScale is { } v1 ? Clamp(v1, 0.25f, 3f) : null;
+            s.FollowStrength        = s.FollowStrength is { } v2 ? Clamp(v2, 0.5f, 2.5f) : null;
+            s.ArriveDistance        = s.ArriveDistance is { } v3 ? Clamp(v3, 0.5f, 8f) : null;
+            s.FollowAgainDistance   = s.FollowAgainDistance is { } v4 ? Clamp(v4, 1f, 30f) : null;
+            s.WalkDistance          = s.WalkDistance is { } v5 ? Clamp(v5, 0.5f, 30f) : null;
+            s.TeleportDistance      = s.TeleportDistance is { } v6 ? Clamp(v6, 2f, 60f) : null;
+            s.TeleportHeight        = s.TeleportHeight is { } v7 ? Clamp(v7, 4f, 40f) : null;
+            s.StuckTeleportSeconds  = s.StuckTeleportSeconds is { } v8 ? Clamp(v8, 0f, 30f) : null;
+            s.DetourDuration        = s.DetourDuration is { } v9 ? Clamp(v9, 0.1f, 5f) : null;
+            s.DetourCooldown        = s.DetourCooldown is { } v10 ? Clamp(v10, 0f, 10f) : null;
+            s.RoamRange             = s.RoamRange is { } v11 ? Clamp(v11, 1f, 30f) : null;
+            s.RoamMin               = s.RoamMin is { } v12 ? Clamp(v12, 0.5f, (s.RoamRange ?? 30f) - 0.5f) : null;
+            s.IdleGestureMin        = s.IdleGestureMin is { } v13 ? Clamp(v13, 1f, 120f) : null;
+            s.IdleGestureMax        = s.IdleGestureMax is { } v14 ? Clamp(v14, 1f, 300f) : null;
+            s.LipFlapSeconds        = s.LipFlapSeconds is { } v15 ? Clamp(v15, 0.05f, 0.6f) : null;
+            s.WalkSpeedScale        = s.WalkSpeedScale is { } v16 ? Clamp(v16, 0.25f, 3f) : null;
+            s.TurnPlaybackSpeed     = s.TurnPlaybackSpeed is { } v17 ? Clamp(v17, 0.25f, 3f) : null;
         }
     }
     /// <summary>
@@ -812,4 +831,67 @@ public sealed class SubNpcSetting
 
     /// <summary>台词配动作的概率（**%**。最小间隔是全局节奏，主面板调）。</summary>
     public float GestureChancePercent { get; set; } = 72f;
+
+    // ── v0.18.69.23 二轮：跟随/瞬移/绕障/游荡/口型覆盖（可空，null = 跟随主 NPC 的设置）──
+    // 与主 NPC 面板同名的旋钮这里都有；勾「跟随主」时用主配置值，取消勾选后本槽独立。
+
+    /// <summary>速度倍率（null = 跟随主 NPC）。</summary>
+    public float? SpeedScale { get; set; }
+
+    /// <summary>跟随强度（null = 跟随主 NPC）。</summary>
+    public float? FollowStrength { get; set; }
+
+    /// <summary>到位距离（null = 跟随主 NPC）。</summary>
+    public float? ArriveDistance { get; set; }
+
+    /// <summary>玩家离开多远重新跟随（null = 跟随主 NPC）。</summary>
+    public float? FollowAgainDistance { get; set; }
+
+    /// <summary>跑走迟滞带（null = 跟随主 NPC）。</summary>
+    public float? WalkDistance { get; set; }
+
+    /// <summary>超过多远直接瞬移（null = 跟随主 NPC）。</summary>
+    public float? TeleportDistance { get; set; }
+
+    /// <summary>高低差瞬移阈值（null = 跟随主 NPC）。</summary>
+    public float? TeleportHeight { get; set; }
+
+    /// <summary>卡住多少秒强制瞬移（null = 跟随主 NPC）。</summary>
+    public float? StuckTeleportSeconds { get; set; }
+
+    /// <summary>是否自动绕障（null = 跟随主 NPC）。</summary>
+    public bool? AvoidanceEnabled { get; set; }
+
+    /// <summary>绕行持续秒数（null = 跟随主 NPC）。</summary>
+    public float? DetourDuration { get; set; }
+
+    /// <summary>两次绕行冷却（null = 跟随主 NPC）。</summary>
+    public float? DetourCooldown { get; set; }
+
+    /// <summary>游荡最远距离（null = 跟随主 NPC）。</summary>
+    public float? RoamRange { get; set; }
+
+    /// <summary>游荡最近起点（null = 跟随主 NPC）。</summary>
+    public float? RoamMin { get; set; }
+
+    /// <summary>移动时禁止小动作/说话（null = 跟随主 NPC）。</summary>
+    public bool? BlockGesturesWhileMoving { get; set; }
+
+    /// <summary>待机小动作最短间隔（null = 跟随主 NPC）。</summary>
+    public float? IdleGestureMin { get; set; }
+
+    /// <summary>待机小动作最长间隔（null = 跟随主 NPC）。</summary>
+    public float? IdleGestureMax { get; set; }
+
+    /// <summary>说话口型开关（null = 跟随主 NPC）。</summary>
+    public bool? LipSyncEnabled { get; set; }
+
+    /// <summary>口型开合节奏（null = 跟随主 NPC）。</summary>
+    public float? LipFlapSeconds { get; set; }
+
+    /// <summary>走路动画播放速度（null = 跟随主 NPC）。</summary>
+    public float? WalkSpeedScale { get; set; }
+
+    /// <summary>转身动作播放速度（null = 跟随主 NPC）。</summary>
+    public float? TurnPlaybackSpeed { get; set; }
 }
