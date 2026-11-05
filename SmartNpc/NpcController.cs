@@ -1437,16 +1437,24 @@ public sealed unsafe class NpcController : IDisposable
         SubNpcs?.Tick(FrameDelta);
 
         // ── 插件加载自动召唤（v0.18.69.20）──
-        // 首帧一次性武装：复用换区重召唤的 _respawnTimer 通道 —— 它天然满足全部约束：
+        // 一次性武装：复用换区重召唤的 _respawnTimer 通道 —— 它天然满足全部约束：
         // 玩家未进世界不召唤（条件里有 LocalPlayer）、手动送走 Dismiss 清零即取消、
         // 手动召唤 Summon 也清零即取消。之后与换区重召唤行为完全一致。
+        // ⚠️ v0.18.69.24 修正：原版"首帧武装"在标题/选人画面就把一次性机会烧掉了
+        // （插件随启动器加载，那时 LocalPlayer 还是 null；3 秒倒计时在进世界前空转完，
+        //   到点条件永不满足 —— 用户实测「副 NPC 会自动召唤而主 NPC 不会」即此根因，
+        //   副 NPC 是等本地玩家存在那一帧才武装的）。改成同款时机：玩家进世界才武装。
         if (_autoSummonArmed)
         {
-            _autoSummonArmed = false;
-            if (_config?.AutoSummonOnLoad == true && _respawnTimer <= 0f)
+            var lp0 = _objectTable?.LocalPlayer;
+            if (lp0 is not null && lp0.Address != nint.Zero)
             {
-                _respawnTimer = Math.Clamp(_config?.AutoRespawnDelay ?? 3f, 2f, 15f);
-                _log.Information("[SmartNpc] 自动召唤已武装：进游戏世界后 {0:F1}s 召唤。", _respawnTimer);
+                _autoSummonArmed = false;
+                if (_config?.AutoSummonOnLoad == true && _respawnTimer <= 0f)
+                {
+                    _respawnTimer = Math.Clamp(_config?.AutoRespawnDelay ?? 3f, 2f, 15f);
+                    _log.Information("[SmartNpc] 自动召唤已武装：进游戏世界后 {0:F1}s 召唤。", _respawnTimer);
+                }
             }
         }
 
